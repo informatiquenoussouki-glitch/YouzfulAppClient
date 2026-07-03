@@ -1,0 +1,47 @@
+diff --git a/node_modules/react-native-credit-card-input-plus/src/CardView.js b/node_modules/react-native-credit-card-input-plus/src/CardView.js
+index 14caaac..25e1094 100644
+--- a/node_modules/react-native-credit-card-input-plus/src/CardView.js
++++ b/node_modules/react-native-credit-card-input-plus/src/CardView.js
+@@ -2,7 +2,6 @@ import React, { useMemo, useEffect, useRef, useState } from "react";
+ import PropTypes from "prop-types";
+ import {
+   View,
+-  ImageBackground,
+   Image,
+   Text,
+   StyleSheet,
+@@ -145,9 +144,8 @@ const CardView = ({
+   return (
+     <View style={[s.cardContainer, containerSize]}>
+       <CardFlip ref={cardFlipRef} perspective={2000} flipZoom={0.02}>
+-        <ImageBackground
+-          style={[BASE_SIZE, s.cardFace, transform]}
+-          source={imageFront}
++        <View
++          style={[BASE_SIZE, s.cardFace, transform, { backgroundColor: '#1a1f71', borderRadius: 10, overflow: 'hidden' }]}
+         >
+           <Image style={[s.icon]} source={Icons[brand]} />
+           <Text
+@@ -208,10 +206,9 @@ const CardView = ({
+               {!cvc ? placeholder.cvc : cvc}
+             </Text>
+           )}
+-        </ImageBackground>
+-        <ImageBackground
+-          style={[BASE_SIZE, s.cardFace, transform]}
+-          source={imageBack}
++        </View>
++        <View
++          style={[BASE_SIZE, s.cardFace, transform, { backgroundColor: '#2c2c5e', borderRadius: 10, overflow: 'hidden' }]}
+         >
+           <Text
+             style={[
+@@ -223,7 +220,7 @@ const CardView = ({
+           >
+             {!cvc ? placeholder.cvc : cvc}
+           </Text>
+-        </ImageBackground>
++        </View>
+       </CardFlip>
+     </View>
+   );
