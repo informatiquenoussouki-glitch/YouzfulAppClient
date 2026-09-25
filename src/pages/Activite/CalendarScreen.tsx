@@ -22,15 +22,30 @@ export default function CalendarScreen() {
   const today = dayjs();
   const [currentMonth, setCurrentMonth] = useState(dayjs());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [childCount, setChildCount] = useState(0);
   const [adultCount, setAdultCount] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Créneaux horaires proposés (08h-20h, pas d'1h)
+  const TIME_SLOTS = [
+    "08:00", "09:00", "10:00", "11:00", "12:00", "13:00",
+    "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00",
+  ];
 
   // ⭐ Ref pour le scroll automatique vers le formulaire
   const scrollRef = useRef<ScrollView>(null);
 
   const ADULT_PRICE = Number(packageData?.price) || 43.98;
   const CHILD_PRICE = 13.33;
+
+  const formatDuration = (minutes: number) => {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if (h === 0) return `${m} min`;
+    if (m === 0) return h === 1 ? "1 heure" : `${h} heures`;
+    return `${h}h${m}`;
+  };
 
   const total = useMemo(
     () => (adultCount * ADULT_PRICE + childCount * CHILD_PRICE).toFixed(2),
@@ -42,9 +57,14 @@ export default function CalendarScreen() {
       Alert.alert("Erreur", t("selct"));
       return;
     }
+    if (!selectedTime) {
+      Alert.alert("Erreur", t("selctTime") || "Veuillez choisir une heure");
+      return;
+    }
     navigation.navigate("CheckoutScreen", {
       packageData,
       selectedDate,
+      selectedTime,
       childCount,
       adultCount,
       total: parseFloat(total),
@@ -72,6 +92,9 @@ export default function CalendarScreen() {
   return (
     <ScrollView ref={scrollRef} style={styles.container}>
       <Text style={styles.header}>{packageData?.name || "Package"}</Text>
+      {packageData?.duration ? (
+        <Text style={styles.durationSub}>{formatDuration(Number(packageData.duration))}</Text>
+      ) : null}
 
       {/* Month Header */}
       <View style={styles.monthHeader}>
@@ -155,6 +178,25 @@ export default function CalendarScreen() {
             {dayjs(selectedDate).format("dddd, D MMM YYYY")}
           </Text>
 
+          <Text style={styles.label}>{t("heure") || "Heure"}</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.timeRow}>
+            {TIME_SLOTS.map((slot) => {
+              const isSelected = slot === selectedTime;
+              return (
+                <TouchableOpacity
+                  key={slot}
+                  style={[styles.timeChip, isSelected && styles.timeChipSelected]}
+                  onPress={() => setSelectedTime(slot)}
+                >
+                  <Text style={[styles.timeChipText, isSelected && styles.timeChipTextSelected]}>
+                    {slot}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <View style={styles.separator} />
+
           <View style={styles.quantityRow}>
             <Text style={styles.label}>{t("Adult")}</Text>
             <Counter
@@ -231,7 +273,8 @@ function Counter({ value, onChange, min = 0, max = 99 }) {
 /* STYLES */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "transparent", padding: 16 },
-  header: { fontSize: 24, fontWeight: "bold", textAlign: "center", marginBottom: 10 },
+  header: { fontSize: 24, fontWeight: "bold", textAlign: "center", marginBottom: 2 },
+  durationSub: { fontSize: 14, color: "#1da3c6", textAlign: "center", marginBottom: 10, fontWeight: "600" },
   monthHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -264,6 +307,18 @@ const styles = StyleSheet.create({
   priceText: { fontSize: 10, color: "#1da3c6", marginTop: 2 },
   detailsBox: { marginTop: 20, padding: 15, backgroundColor: "#f9f9f9", borderRadius: 10 },
   dateText: { fontSize: 16, fontWeight: "600", marginBottom: 10 },
+  timeRow: { marginBottom: 10, marginTop: 4 },
+  timeChip: {
+    borderWidth: 1,
+    borderColor: "#1da3c6",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginRight: 8,
+  },
+  timeChipSelected: { backgroundColor: "#1da3c6" },
+  timeChipText: { fontSize: 14, fontWeight: "600", color: "#1da3c6" },
+  timeChipTextSelected: { color: "#fff" },
   quantityRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   label: { fontSize: 16 },
   subPrice: { color: "#666", marginBottom: 8 },

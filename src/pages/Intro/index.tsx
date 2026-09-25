@@ -72,19 +72,23 @@ const Intro: React.FC<{ navigation: any }> = ({ navigation }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [],
     );
-    async function setVal() {
-        try {
-            await AsyncStorage.setItem(
-                '@firstTime',
-                'True'
-            ).then(() => {
-                navigation.replace("BottomTabs");
-            })
-        } catch (e) {
-            // error reading value
-        }
+async function goToLogin() {
+    try {
+        await AsyncStorage.setItem('@firstTime', 'True');
+        navigation.replace("LoginScreen");
+    } catch (e) {
+        console.log("Erreur lors de l'enregistrement de l'introduction :", e);
     }
+}
 
+async function goToRegister() {
+    try {
+        await AsyncStorage.setItem('@firstTime', 'True');
+        navigation.replace("InscriptionScreen");
+    } catch (e) {
+        console.log("Erreur lors de l'enregistrement de l'introduction :", e);
+    }
+}
     return (
         <SafeAreaView style={styles.flex}>
             <AnimatedPagerView
@@ -110,12 +114,25 @@ const Intro: React.FC<{ navigation: any }> = ({ navigation }) => {
                         dotSize={12}
                     />
                 </View> :
-                <View style={styles.buttonContainer}>
-                    <Button mode="contained" color={COLOR.gris} style={styles.buttonStyle} onPress={() => setVal()}>
-                          {t("understood")}
+<View style={styles.buttonContainer}>
 
-                    </Button>
-                </View>
+    <Button
+        mode="contained"
+        style={styles.buttonStyle}
+        onPress={goToLogin}
+    >
+        Se connecter
+    </Button>
+
+    <Button
+        mode="outlined"
+        style={styles.buttonStyle}
+        onPress={goToRegister}
+    >
+        Créer un compte
+    </Button>
+
+</View>
             }
         </SafeAreaView >
     );

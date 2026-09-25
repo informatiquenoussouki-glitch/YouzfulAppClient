@@ -3,12 +3,14 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, FlatList } from 'react
 import { useNavigation, useRoute, useFocusEffect, NavigationProp } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/FontAwesome';
 import moment from 'moment';
+import { useTranslation } from 'react-i18next';
 import { getRecentAlerts } from '../helpers/alertsLog';
 
 const Header = () => {
     // On définit un type rapide pour permettre la navigation vers des écrans imbriqués
     const navigation = useNavigation<NavigationProp<any>>();
     const route = useRoute();
+    const { t } = useTranslation();
     const [alertsVisible, setAlertsVisible] = useState(false);
     const [alerts, setAlerts] = useState<any[]>([]);
 
@@ -38,6 +40,18 @@ const Header = () => {
         await refreshAlerts();
         setAlertsVisible(true);
     }, [refreshAlerts]);
+
+    // Une alerte liée à une réservation (data.reservationId) emmène directement
+    // vers son détail ; une alerte générique (rappel horaire sans lien direct) ferme juste la liste.
+    const onPressAlert = useCallback((item: any) => {
+        setAlertsVisible(false);
+        if (item?.data?.reservationId != null && item?.data?.type) {
+            navigation.navigate(t("details"), {
+                id: item.data.reservationId,
+                type: item.data.type,
+            });
+        }
+    }, [navigation, t]);
 
     return (
         <View style={styles.container}>
@@ -79,11 +93,11 @@ const Header = () => {
                                 <Text style={styles.emptyText}>Aucune alerte récente</Text>
                             }
                             renderItem={({ item }) => (
-                                <View style={styles.alertItem}>
+                                <TouchableOpacity style={styles.alertItem} onPress={() => onPressAlert(item)}>
                                     <Text style={styles.alertTitle}>{item.title}</Text>
                                     <Text style={styles.alertMessage}>{item.message}</Text>
                                     <Text style={styles.alertTime}>{moment(item.timestamp).fromNow()}</Text>
-                                </View>
+                                </TouchableOpacity>
                             )}
                         />
                         <TouchableOpacity style={styles.closeButton} onPress={() => setAlertsVisible(false)}>

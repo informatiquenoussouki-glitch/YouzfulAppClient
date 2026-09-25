@@ -41,56 +41,54 @@ const BabySitterScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
         const [cachedSkills, cachedLangs, cachedCities] = await Promise.all([
           AsyncStorage.getItem("cachedSkills"),
           AsyncStorage.getItem("cachedLangs"),
-          AsyncStorage.getItem("cachedCities"),
+          AsyncStorage.getItem("cachedCities_babysitter"),
         ]);
 
         if (cachedSkills) setSkills(JSON.parse(cachedSkills));
         if (cachedLangs) setLanguages(JSON.parse(cachedLangs));
         if (cachedCities) setItems(JSON.parse(cachedCities));
 
-        // 2️⃣ Mise à jour des données en arrière-plan
-        setTimeout(async () => {
-          const [skillRes, LangRes, CityRes] = await Promise.all([
-            settings.Skills(token),
-            settings.Languages(token),
-            settings.Cities(),
-          ]);
+        // 2️⃣ Mise à jour des données en arrière-plan (lancée immédiatement, sans délai artificiel)
+        const [skillRes, LangRes, CityRes] = await Promise.all([
+          settings.Skills(token),
+          settings.Languages(token),
+          settings.Cities(),
+        ]);
 
-          const skill = skillRes?.data ?? [];
-          const Langs = LangRes?.data ?? [];
-          const Cities = CityRes?.data ?? [];
+        const skill = skillRes?.data ?? [];
+        const Langs = LangRes?.data ?? [];
+        const Cities = CityRes?.data ?? [];
 
-          const newSkills = skill.map((val: any) => ({
-            label: val?.name,
-            value: val?.code,
-            price: val?.price,
-            id: val?.id,
-            hours: 0, // Initialisé à 0 heure
-          }));
+        const newSkills = skill.map((val: any) => ({
+          label: val?.name,
+          value: val?.code,
+          price: val?.price,
+          id: val?.id,
+          hours: 0, // Initialisé à 0 heure
+        }));
 
-          const newLangs = Langs.map((val: any) => ({
-            item: val?.name,
-            code: val?.code,
-            id: val?.id,
-          }));
+        const newLangs = Langs.map((val: any) => ({
+          item: val?.name,
+          code: val?.code,
+          id: val?.id,
+        }));
 
-          const newCities = Cities.map((val: any) => ({
-            label: val?.name,
-            value: val?.name,
-          }));
+        const newCities = Cities.map((val: any) => ({
+          label: val?.name,
+          value: val?.name,
+        }));
 
-          setSkills(newSkills);
-          setLanguages(newLangs);
-          setItems(newCities);
+        setSkills(newSkills);
+        setLanguages(newLangs);
+        setItems(newCities);
 
-          await Promise.all([
-            AsyncStorage.setItem("cachedSkills", JSON.stringify(newSkills)),
-            AsyncStorage.setItem("cachedLangs", JSON.stringify(newLangs)),
-            AsyncStorage.setItem("cachedCities", JSON.stringify(newCities)),
-          ]);
+        await Promise.all([
+          AsyncStorage.setItem("cachedSkills", JSON.stringify(newSkills)),
+          AsyncStorage.setItem("cachedLangs", JSON.stringify(newLangs)),
+          AsyncStorage.setItem("cachedCities_babysitter", JSON.stringify(newCities)),
+        ]);
 
-          setIsLoading(false);
-        }, 500);
+        setIsLoading(false);
       } catch (err) {
         console.error("❌ Erreur fetchData :", err);
         setIsLoading(false);

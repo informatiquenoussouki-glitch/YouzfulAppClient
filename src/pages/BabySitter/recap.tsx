@@ -25,6 +25,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 import { settings } from '../../api';
 import { ButtonComponent } from '../../components';
 import { useTranslation } from 'react-i18next';
+import { useUnpaidCheck } from '../../hooks/useUnpaidCheck';
+import UnpaidMissionModal from '../../components/UnpaidMissionModal';
 
 const windowWidth = Dimensions.get('window').width;
 moment.locale('fr');
@@ -38,6 +40,7 @@ const BabySitterScreenRecap: React.FC<{ navigation: any }> = ({ navigation }) =>
   const data = useSelector(({ babySitting }: any) => babySitting);
   const globalsettings = useSelector(({ globalSetting }: any) => globalSetting);
 
+  const { unpaidMission, checkBeforeSubmit, clearUnpaid } = useUnpaidCheck();
   const [visible, setVisible] = useState(false);
   const [loadingValidation, setLoadingValidation] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -74,6 +77,8 @@ const BabySitterScreenRecap: React.FC<{ navigation: any }> = ({ navigation }) =>
 
   // Traitement et envoi de la réservation vers l'API Backend
   const navigatee = async () => {
+    const canSubmit = await checkBeforeSubmit();
+    if (!canSubmit) return;
     setIsLoading(true);
     setVisible(true);
     setLoadingValidation(true);
@@ -254,6 +259,12 @@ const BabySitterScreenRecap: React.FC<{ navigation: any }> = ({ navigation }) =>
           </View>
         </Modal>
       </ScrollView>
+      <UnpaidMissionModal
+        visible={!!unpaidMission}
+        mission={unpaidMission}
+        onPaid={clearUnpaid}
+        onDismiss={clearUnpaid}
+      />
     </SafeAreaView>
   );
 };

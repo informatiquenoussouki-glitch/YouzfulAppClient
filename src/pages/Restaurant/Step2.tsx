@@ -58,11 +58,13 @@ const RestoStep2: React.FC<{ navigation: any, route: any }> = ({ navigation, rou
     try {
       const resto = await settings.RestaurantById(token, id);
 
-      if (Array.isArray(resto)) {
-        updateItems(resto);
-        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(resto));
+      const platsArray = Array.isArray(resto) ? resto : resto?.data ?? [];
 
-        console.log("🟢 API chargée & cache mis à jour :", resto.length);
+      if (Array.isArray(platsArray)) {
+        updateItems(platsArray);
+        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(platsArray));
+
+        console.log("🟢 API chargée & cache mis à jour :", platsArray.length);
       } else {
         console.log("⚠️ Format API inattendu :", resto);
       }

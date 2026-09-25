@@ -16,6 +16,8 @@ import { settings } from "../../api";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { useTranslation } from "react-i18next";
 import { ButtonComponent } from "../../components";
+import { useUnpaidCheck } from "../../hooks/useUnpaidCheck";
+import UnpaidMissionModal from "../../components/UnpaidMissionModal";
 import { Colors } from "react-native/Libraries/NewAppScreen";
 
 moment.locale("fr");
@@ -26,6 +28,7 @@ const GuideRecap: React.FC<{ navigation: any }> = ({ navigation }) => {
   const token = useSelector(({ userReducer }: any) => userReducer.token);
   const user = useSelector(({ userReducer }: any) => userReducer.user);
   const data = useSelector(({ GuideReducer }: any) => GuideReducer);
+  const { unpaidMission, checkBeforeSubmit, clearUnpaid } = useUnpaidCheck();
   const [visible, setVisible] = useState(false);
   const [result, setResult] = useState<any>(null);
   
@@ -35,6 +38,8 @@ const GuideRecap: React.FC<{ navigation: any }> = ({ navigation }) => {
 const [loading, setLoading] = useState(false); // 🔹 état local pour le spinner
 
 const saveGuide = async () => {
+    const canSubmit = await checkBeforeSubmit();
+    if (!canSubmit) return;
  try {
     const result = await settings.SetGuide(
       {
@@ -240,6 +245,12 @@ console.log("🟦 Recap description =", data?.description)
 
 
       </ScrollView>
+      <UnpaidMissionModal
+        visible={!!unpaidMission}
+        mission={unpaidMission}
+        onPaid={clearUnpaid}
+        onDismiss={clearUnpaid}
+      />
     </SafeAreaView>
   );
 };

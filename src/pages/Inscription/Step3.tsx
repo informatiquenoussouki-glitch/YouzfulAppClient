@@ -40,12 +40,11 @@ const InscriptionScreenStep3: React.FC<{ navigation: any }> = ({ navigation }) =
           </Text>
         </View>
       </ScrollView>
-      <ButtonComponent
-        title={t("makeFirstRequest")}
-        press={() => navigation.navigate("HistoryStack")}
-        isLoading={false}
-
-      />
+<ButtonComponent
+  title={t("makeFirstRequest")}
+  press={() => navigation.replace("BottomTabs")}
+  isLoading={false}
+/>
     </SafeAreaView>
   );
 };

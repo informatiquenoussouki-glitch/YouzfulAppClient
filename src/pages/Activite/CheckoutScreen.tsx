@@ -19,14 +19,17 @@ import { CreditCardInput } from "react-native-credit-card-input-view";
 import { setReservation } from "../../api/settings";
 import { t } from "i18next";
 import Ionicons from "react-native-vector-icons/Ionicons";
+import { useUnpaidCheck } from "../../hooks/useUnpaidCheck";
+import UnpaidMissionModal from "../../components/UnpaidMissionModal";
 const windowWidth = Dimensions.get('window').width;
 
 
 export default function CheckoutScreen() {
    const navigation = useNavigation();
   const route = useRoute();
-  const { packageData, selectedDate, total, childCount, adultCount } = route.params;
+  const { packageData, selectedDate, selectedTime, total, childCount, adultCount } = route.params;
   const user = useSelector((state: any) => state.userReducer?.user);
+  const { unpaidMission, checkBeforeSubmit, clearUnpaid } = useUnpaidCheck();
 
   const [visible, setVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -40,6 +43,8 @@ export default function CheckoutScreen() {
 
   // ✅ Nouvelle version : enregistre uniquement la réservation
 async function finishProcess() {
+  const canSubmit = await checkBeforeSubmit();
+  if (!canSubmit) return;
   hideModal(); // fermer le premier modal
 
   // ⚡ 1) Afficher modal succès immédiatement
@@ -56,6 +61,7 @@ async function finishProcess() {
         userid: user?.id,
         package_id: packageData?.id,
         date_selected: selectedDate,
+        time_selected: selectedTime,
         adult_count: adultCount || 1,
         child_count: childCount || 0,
         total_price: parseFloat(total),
@@ -88,7 +94,7 @@ async function finishProcess() {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{packageData.activityName}</Text>
           <Text style={styles.subtitle}>{packageData.name}</Text>
-          <Text style={styles.date}>{selectedDate}</Text>
+          <Text style={styles.date}>{selectedDate} {selectedTime ? `- ${selectedTime}` : ""}</Text>
           <Text style={styles.freeCancel}>{t("anulation")}</Text>
         </View>
       </View>
@@ -206,6 +212,12 @@ async function finishProcess() {
 </Modal>
 
 
+      <UnpaidMissionModal
+        visible={!!unpaidMission}
+        mission={unpaidMission}
+        onPaid={clearUnpaid}
+        onDismiss={clearUnpaid}
+      />
     </View>
   );
 }

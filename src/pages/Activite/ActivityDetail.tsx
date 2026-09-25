@@ -41,6 +41,32 @@ export default function ActivityDetailScreen() {
   const [packages, setPackages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<{ [key: number]: boolean }>({});
+  const [selectedDurations, setSelectedDurations] = useState<{ [key: number]: number }>({});
+
+  // 30 min → "30 min", 60 → "1 heure", 90 → "1h30" ...
+  const formatDuration = (minutes: number) => {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if (h === 0) return `${m} min`;
+    if (m === 0) return h === 1 ? "1 heure" : `${h} heures`;
+    return `${h}h${m}`;
+  };
+
+  // Multiples de la durée de base du package (ex: base 30 min -> 30,60,90,120,150,180)
+  const getDurationOptions = (baseDuration: number) => {
+    const steps = 6;
+    const options = [];
+    for (let i = 1; i <= steps; i++) options.push(baseDuration * i);
+    return options;
+  };
+
+  // Prix pour la durée choisie : prix exact de la table si durée de base, sinon calcul proportionnel
+  const computePackagePrice = (item: any, duration: number) => {
+    const baseDuration = Number(item.duration) || 30;
+    const basePrice = Number(item.price) || 0;
+    if (duration === baseDuration) return basePrice;
+    return Math.round(basePrice * (duration / baseDuration) * 100) / 100;
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -116,26 +142,59 @@ export default function ActivityDetailScreen() {
         {loading && packages.length === 0 ? (
           <ActivityIndicator color="#1da3c6" />
         ) : (
-          packages.map((item) => (
-            <View key={item.id} style={styles.packageCard}>
-              <View style={styles.packageHeader}>
-                <Text style={styles.packageName}>{item.name}</Text>
-                <Text style={styles.packagePrice}>USD {item.price}</Text>
+          packages.map((item) => {
+            const baseDuration = Number(item.duration) || 30;
+            const currentDuration = selectedDurations[item.id] || baseDuration;
+            const currentPrice = computePackagePrice(item, currentDuration);
+            const durationOptions = getDurationOptions(baseDuration);
+
+            return (
+              <View key={item.id} style={styles.packageCard}>
+                <View style={styles.packageHeader}>
+                  <Text style={styles.packageName}>{item.name}</Text>
+                  <Text style={styles.packagePrice}>USD {currentPrice.toFixed(2)}</Text>
+                </View>
+
+                {expanded[item.id] && <Text style={styles.packageDetails}>{item.description}</Text>}
+
+                <Text style={styles.durationLabel}>{t("Durée") || "Durée"}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.durationRow}>
+                  {durationOptions.map((duration) => {
+                    const isSelected = duration === currentDuration;
+                    const price = computePackagePrice(item, duration);
+                    return (
+                      <TouchableOpacity
+                        key={duration}
+                        style={[styles.durationChip, isSelected && styles.durationChipSelected]}
+                        onPress={() => setSelectedDurations(p => ({ ...p, [item.id]: duration }))}
+                      >
+                        <Text style={[styles.durationChipText, isSelected && styles.durationChipTextSelected]}>
+                          {formatDuration(duration)}
+                        </Text>
+                        <Text style={[styles.durationChipPrice, isSelected && styles.durationChipTextSelected]}>
+                          USD {price.toFixed(2)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                <View style={styles.packageFooter}>
+                  <TouchableOpacity onPress={() => setExpanded(p => ({...p, [item.id]: !p[item.id]}))}>
+                    <Text style={styles.moreText}>{expanded[item.id] ? "Fermer" : "Voir détails"}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.selectBtn}
+                    onPress={() => navigation.navigate("CalendarScreen", {
+                      packageData: { ...item, price: currentPrice, duration: currentDuration },
+                    })}
+                  >
+                    <Text style={styles.selectBtnText}>Sélectionner</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              {expanded[item.id] && <Text style={styles.packageDetails}>{item.description}</Text>}
-              <View style={styles.packageFooter}>
-                <TouchableOpacity onPress={() => setExpanded(p => ({...p, [item.id]: !p[item.id]}))}>
-                  <Text style={styles.moreText}>{expanded[item.id] ? "Fermer" : "Voir détails"}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={styles.selectBtn}
-                  onPress={() => navigation.navigate("CalendarScreen", { packageData: item })}
-                >
-                  <Text style={styles.selectBtnText}>Sélectionner</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
+            );
+          })
         )}
       </View>
     </ScrollView>
@@ -181,6 +240,21 @@ const styles = StyleSheet.create({
   packageName: { fontSize: 16, fontWeight: "600", flex: 1 },
   packagePrice: { color: "#1da3c6", fontWeight: "bold" },
   packageDetails: { fontSize: 13, color: "#777", marginBottom: 10 },
+  durationLabel: { fontSize: 13, fontWeight: "600", color: "#444", marginBottom: 6 },
+  durationRow: { marginBottom: 10 },
+  durationChip: {
+    borderWidth: 1,
+    borderColor: "#1da3c6",
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    alignItems: "center",
+  },
+  durationChipSelected: { backgroundColor: "#1da3c6" },
+  durationChipText: { fontSize: 13, fontWeight: "600", color: "#1da3c6" },
+  durationChipPrice: { fontSize: 11, color: "#1da3c6", marginTop: 2 },
+  durationChipTextSelected: { color: "#fff" },
   packageFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   moreText: { color: "#1da3c6", fontWeight: "600" },
   selectBtn: { backgroundColor: "#d64e41", paddingVertical: 8, paddingHorizontal: 15, borderRadius: 8 },

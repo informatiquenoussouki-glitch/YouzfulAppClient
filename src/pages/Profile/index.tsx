@@ -27,6 +27,8 @@ import Ionicons from 'react-native-vector-icons/Ionicons';
 
 import { useTranslation } from "react-i18next";
 import i18n from '../../i18n/i18n';
+import { useFocusEffect } from '@react-navigation/native';
+import { getUnreadMessagesAdminCount } from '../../api/settings';
 
 const ProfileScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { t } = useTranslation();
@@ -46,11 +48,21 @@ const ProfileScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const [Efname, setEfname] = useState(false);
   const [Elname, setElname] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     dispatch(ChangeColor(COLOR.primary1));
     setDrawerOpen(false);
   }, [userToken, userData]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!userToken) return;
+      getUnreadMessagesAdminCount(userToken)
+        .then((res: any) => { if (res?.code === 200) setUnreadCount(res.count || 0); })
+        .catch(() => {});
+    }, [userToken])
+  );
   function drawerContent() {
     return (
       <View style={styles.animatedBox}>
@@ -70,6 +82,17 @@ const ProfileScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
             title={t("paymentMethods")}
             press={() => navigation.navigate('PaymentScreen')}
           />
+          <TouchableOpacity
+            onPress={() => { setDrawerOpen(false); navigation.navigate('ContactAdminScreen'); }}
+            style={styles.contactAdminRow}>
+            <Ionicons name="mail-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+            <Text style={styles.contactAdminText}>{t("contactAdmin")}</Text>
+            {unreadCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <DrawerItem
             selected={false}
             title={t("help")}
@@ -451,6 +474,33 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
     width: '100%',
     opacity: 0.7,
+  },
+  contactAdminRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  contactAdminText: {
+    fontSize: 16,
+    fontWeight: '400',
+    lineHeight: 20,
+    color: '#FFF',
+    flex: 1,
+  },
+  unreadBadge: {
+    backgroundColor: '#E53935',
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    marginLeft: 6,
+  },
+  unreadBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });
 

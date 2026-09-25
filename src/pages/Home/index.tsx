@@ -227,7 +227,7 @@ useEffect(() => {
           <ServiceCard
             title={t('babyService')}
             
-            image={require('../../assets/images/baby-siter.png')}
+            image={require('../../assets/images/baby-siter.webp')}
             onImagePress={() => navigateTo(t('babysitting'), COLOR.arrow)}
           />
           <ServiceCard

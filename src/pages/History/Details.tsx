@@ -35,6 +35,33 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 moment.locale('fr');
 const windowWidth = Dimensions.get('window').width;
 
+// Ligne "libellé : valeur" alignée sur une même rangée pour une lecture claire et homogène,
+// quel que soit le type de réservation (avant : titre/valeur empilés, mise en page variable).
+const InfoRow = ({ icon, label, value }: { icon?: React.ReactNode; label: string; value: React.ReactNode }) => {
+  // Certaines clés i18n incluent déjà un ":" (ex. "Durée :"), d'autres non (ex. "City") :
+  // on retire un éventuel ":" existant avant d'en ajouter un seul, pour ne jamais le dupliquer.
+  const cleanLabel = label.replace(/\s*:\s*$/, '');
+  return (
+    <View style={styles.infoRow}>
+      <View style={styles.infoLabel}>
+        {/* Emplacement d'icône toujours réservé (même vide) pour que le texte du
+            libellé démarre au même x sur toutes les lignes, avec ou sans icône. */}
+        <View style={styles.infoIcon}>{icon}</View>
+        <Text style={styles.infoTitle}>{cleanLabel} :</Text>
+      </View>
+      <Text style={styles.infoValue} numberOfLines={3}>{value}</Text>
+    </View>
+  );
+};
+
+// Ligne icône + texte (ex: présence voiture, nombre de passagers, plat commandé)
+const IconValueRow = ({ icon, value }: { icon: React.ReactNode; value: React.ReactNode }) => (
+  <View style={styles.rowIconGroup}>
+    {icon}
+    <Text style={styles.infoValueItem}>{value}</Text>
+  </View>
+);
+
 const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
   route,
   navigation,
@@ -132,14 +159,28 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
     .startOf("day")
     .diff(moment(new Date(), "YYYY-MM-DD").startOf("day"), "days");
 
-  const isCancelled = item?.status === "4" || item?.etat === "4" || item?.situation === "4";
+  const isCancelled =
+    item?.statut_prestataire === "annuler" ||
+    item?.status === "4" ||
+    item?.etat === "4" ||
+    item?.situation === "4";
 
-  // Situation : État d'avancement de la mission (Haut) avec gestion d'expiration logique
+  // Situation : État d'avancement de la mission (Haut), basé sur le statut réel du
+  // prestataire (statut_prestataire) plutôt que sur status/etat/situation, qui ne
+  // distinguait jamais "en attente" de "en cours" (champ jamais renseigné par l'API).
   const renderSituationStatus = () => {
-    const status = item?.status || item?.etat || item?.situation || "0";
+    const status = (item?.statut_prestataire || "en_attente").toString().toLowerCase().trim();
 
-    // Correction logique UX : Si la commande est dans le passé (diff < 0) et qu'elle n'est ni en cours, ni finie, ni annulée
-    if (diff < 0 && String(status) !== "2" && String(status) !== "3" && String(status) !== "4" && String(status) !== "ongoing" && String(status) !== "inprogress" && String(status) !== "completed" && String(status) !== "finished" && String(status) !== "cancelled") {
+    if (isCancelled) {
+      return (
+        <View style={[styles.situationBadge, { backgroundColor: '#FFEBEE', borderColor: '#EF5350' }]}>
+          <Text style={[styles.situationText, { color: '#D32F2F' }]}>❌ Annulée</Text>
+        </View>
+      );
+    }
+
+    // Expirée : date déjà passée et la mission n'a jamais démarré ni été terminée
+    if (diff < 0 && status !== "en_cours" && status !== "termine") {
       return (
         <View style={[styles.situationBadge, { backgroundColor: '#FFEBEE', borderColor: '#EF5350' }]}>
           <Text style={[styles.situationText, { color: '#D32F2F' }]}>⏰ Demande Expirée</Text>
@@ -147,43 +188,29 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
       );
     }
 
-    switch (String(status)) {
-      case "0":
-      case "pending":
+    switch (status) {
+      case "en_attente":
         return (
           <View style={[styles.situationBadge, { backgroundColor: '#FFF3E0', borderColor: '#FFB74D' }]}>
             <Text style={[styles.situationText, { color: '#F57C00' }]}>⏳ En attente d'acceptation</Text>
           </View>
         );
-      case "1":
-      case "accepted":
-      case "confirmed":
+      case "accepte":
         return (
           <View style={[styles.situationBadge, { backgroundColor: '#E8F5E9', borderColor: '#81C784' }]}>
             <Text style={[styles.situationText, { color: '#388E3C' }]}>✅ Demande Confirmée</Text>
           </View>
         );
-      case "2":
-      case "ongoing":
-      case "inprogress":
+      case "en_cours":
         return (
           <View style={[styles.situationBadge, { backgroundColor: '#E1F5FE', borderColor: '#4FC3F7' }]}>
             <Text style={[styles.situationText, { color: '#0288D1' }]}>🚀 Mission en cours</Text>
           </View>
         );
-      case "3":
-      case "completed":
-      case "finished":
+      case "termine":
         return (
           <View style={[styles.situationBadge, { backgroundColor: '#EDE7F6', borderColor: '#B39DDB' }]}>
             <Text style={[styles.situationText, { color: '#5E35B1' }]}>🏁 Mission terminée</Text>
-          </View>
-        );
-      case "4":
-      case "cancelled":
-        return (
-          <View style={[styles.situationBadge, { backgroundColor: '#FFEBEE', borderColor: '#EF5350' }]}>
-            <Text style={[styles.situationText, { color: '#D32F2F' }]}>❌ Annulée</Text>
           </View>
         );
       default:
@@ -209,12 +236,23 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
             try {
               setIsLoading(true);
               let result = await settings.CancelReservation(token, type, item?.id);
-              if (result) {
-                Toast.show({ text1: "Succès", text2: "Demande annulée avec succès", type: "success" });
+              if (result?.status === "annuler") {
+             Toast.show({ text1: "Succès", text2: "Demande annulée avec succès", type: "success" });
                 fetchData();
+              } else {
+                Toast.show({
+                  text1: "Erreur",
+                  text2: result?.message || "L'annulation a échoué, veuillez réessayer.",
+                  type: "error",
+                });
               }
             } catch (error) {
               console.log("Erreur annulation:", error);
+              Toast.show({
+                text1: "Erreur",
+                text2: "Impossible de contacter le serveur, veuillez réessayer.",
+                type: "error",
+              });
             } finally {
               setIsLoading(false);
             }
@@ -234,7 +272,10 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
 
     if (result?.status === "success") {
       setVisibleAvis(false);
+      Toast.show({ text1: "Votre avis a été envoyé", text2: t("reviewSent"), type: "success" });
       fetchData();
+    } else {
+      Toast.show({ text1: "Erreur", text2: t("reviewError"), type: "error" });
     }
     setIsLoading(false);
   }
@@ -243,7 +284,7 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
     fetchData();
   }, [type, id]);
 
-  if (isLoading) {
+  if (isLoading && !item) {
     return (
       <SafeAreaView style={[styles.backgroundStyle, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color="#6C2B8F" />
@@ -309,33 +350,20 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
           <Card.Content style={{ paddingHorizontal: 0, paddingTop: 15 }}>
             {type === "babysitter" && (
               <>
-                <View style={styles.inputGroup}>
-                  <View style={styles.rowIcon}>
-                    <Time width={16} height={16} fill="#6C2B8F" />
-                    <Text style={styles.infoTitle}>{t("dateSelec")} :</Text>
-                  </View>
-                  <Text style={styles.infoValue}>
-                    {moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} {t("at")} {item?.time}h
-                  </Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("city")} :</Text>
-                  <Text style={styles.infoValue}>{item?.ville || "-"}</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("address")} :</Text>
-                  <Text style={styles.infoValue}>{item?.adress || "-"}</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("Durée")} :</Text>
-                  <Text style={styles.infoValue}>{item?.duree || 0}h</Text>
-                </View>
+                <InfoRow
+                  icon={<Time width={16} height={16} fill="#6C2B8F" />}
+                  label={t("dateSelec")}
+                  value={`${moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} ${t("at")} ${item?.time}h`}
+                />
+                <InfoRow label={t("city")} value={item?.ville || "-"} />
+                <InfoRow label={t("address")} value={item?.adress || "-"} />
+                <InfoRow label={t("Durée")} value={`${item?.duree || 0}h`} />
                 {item?.children && item.children.length > 0 && (
-                  <View style={[styles.inputGroup, { marginTop: 10 }]}>
-                    <Text style={[styles.infoTitle, { marginBottom: 5 }]}>{t("detailenfant")} :</Text>
+                  <View style={styles.sectionBox}>
+                    <Text style={styles.sectionTitle}>{t("detailenfant")}</Text>
                     {item.children.map((child: any, index: number) => (
                       <Text key={index} style={styles.infoValueItem}>
-                        👧 {t("child")} {index + 1} - {child.age} {t("ansSexe")} {child.sex === "M" ? "Garçon" : "Fille"}
+                        👧 {t("child")} {index + 1} — {child.age} {t("ansSexe")}, {child.sex === "M" ? "Garçon" : "Fille"}
                       </Text>
                     ))}
                   </View>
@@ -345,73 +373,46 @@ const HistoryScreenDetails: React.FC<{ navigation: any; route: any }> = ({
 
             {type === "guide" && (
               <>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("dateSelec")} :</Text>
-                  <Text style={styles.infoValue}>{moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} {t("at")} {item?.time}h</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("address")} :</Text>
-                  <Text style={styles.infoValue}>{item?.adress || "-"}, {item?.ville || "-"}</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("typevisite")} :</Text>
-                  <Text style={styles.infoValue}>{item?.typevisite_label || "-"}</Text>
-                </View>
-                <View style={styles.rowIconGroup}>
-                  <Car width={16} height={16} />
-                  <Text style={styles.infoValue}> {item?.withCar === "Oui" ? t("withCar") : t("withoutCar")}</Text>
-                </View>
+                <InfoRow
+                  label={t("dateSelec")}
+                  value={`${moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} ${t("at")} ${item?.time}h`}
+                />
+                <InfoRow label={t("address")} value={`${item?.adress || "-"}, ${item?.ville || "-"}`} />
+                <InfoRow label={t("typevisite")} value={item?.typevisite_label || "-"} />
+                <IconValueRow
+                  icon={<Car width={16} height={16} />}
+                  value={item?.withCar === "Oui" ? t("withCar") : t("withoutCar")}
+                />
               </>
             )}
 
             {type === "activité" && (
               <>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("dateSelec")} :</Text>
-                  <Text style={styles.infoValue}>{moment(item?.date || item?.date_selected).format("DD/MM/YYYY")}</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("Activity")} :</Text>
-                  <Text style={styles.infoValue}>{item?.activity_name || "-"}</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("formul")} :</Text>
-                  <Text style={styles.infoValue}>{item?.package_name || "-"}</Text>
-                </View>
+                <InfoRow label={t("dateSelec")} value={moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} />
+                <InfoRow label={t("Activity")} value={item?.activity_name || "-"} />
+                <InfoRow label={t("formul")} value={item?.package_name || "-"} />
               </>
             )}
 
             {type === "transfert" && (
               <>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("dateSelec")} :</Text>
-                  <Text style={styles.infoValue}>{moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} {t("at")} {item?.time}h</Text>
-                </View>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("typevisite")} :</Text>
-                  <Text style={styles.infoValue}>{item?.typevisite_label || item?.typevisites || "-"}</Text>
-                </View>
-                <View style={styles.rowIconGroup}>
-                  <Persone width={16} height={16} />
-                  <Text style={styles.infoValue}> {item?.nbrpersonne || 0} passagers</Text>
-                </View>
+                <InfoRow
+                  label={t("dateSelec")}
+                  value={`${moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} ${t("at")} ${item?.time}h`}
+                />
+                <InfoRow label={t("typevisite")} value={item?.typevisite_label || item?.typevisites || "-"} />
+                <IconValueRow icon={<Persone width={16} height={16} />} value={`${item?.nbrpersonne || 0} passagers`} />
               </>
             )}
 
             {type === "resto" && (
               <>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.infoTitle}>{t("dateSelec")} :</Text>
-                  <Text style={styles.infoValue}>{moment(item?.date || item?.date_selected).format("DD/MM/YYYY")}</Text>
-                </View>
+                <InfoRow label={t("dateSelec")} value={moment(item?.date || item?.date_selected).format("DD/MM/YYYY")} />
                 {platsArray.length > 0 && (
-                  <View style={{ marginTop: 10 }}>
-                    <Text style={[styles.infoTitle, { marginBottom: 8 }]}>{t("Plats")} :</Text>
+                  <View style={styles.sectionBox}>
+                    <Text style={styles.sectionTitle}>{t("Plats")}</Text>
                     {platsArray.map((plat: any, index: number) => (
-                      <View key={index} style={styles.rowIconGroup}>
-                        <Plat width={16} height={16} />
-                        <Text style={styles.infoValueItem}>{plat.nom} × {plat.qte}</Text>
-                      </View>
+                      <IconValueRow key={index} icon={<Plat width={16} height={16} />} value={`${plat.nom} × ${plat.qte}`} />
                     ))}
                   </View>
                 )}
@@ -495,12 +496,15 @@ const styles = StyleSheet.create({
   divider: { backgroundColor: '#E6E8EB', height: 1, marginVertical: 10 },
   situationBadge: { paddingVertical: 5, paddingHorizontal: 12, borderRadius: 6, borderWidth: 1, marginTop: 6, alignSelf: 'flex-start' },
   situationText: { fontSize: 13, fontWeight: '600' },
-  inputGroup: { marginBottom: 14 },
-  rowIcon: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 14 },
+  infoLabel: { flexDirection: 'row', alignItems: 'center', width: '42%' },
+  infoIcon: { width: 22, marginRight: 6, alignItems: 'flex-start' },
   rowIconGroup: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  infoTitle: { fontSize: 15, color: "#2C3E50", fontWeight: "700", marginLeft: 6 },
-  infoValue: { fontSize: 15, color: "#4A4A4A" },
+  infoTitle: { fontSize: 15, color: "#2C3E50", fontWeight: "700", flexShrink: 1 },
+  infoValue: { flex: 1, fontSize: 15, color: "#4A4A4A", textAlign: 'left' },
   infoValueItem: { fontSize: 15, color: "#4A4A4A", marginLeft: 10 },
+  sectionBox: { backgroundColor: '#F7F5FA', borderRadius: 10, padding: 12, marginTop: 6, marginBottom: 6 },
+  sectionTitle: { fontSize: 14, fontWeight: '700', color: '#6C2B8F', marginBottom: 8 },
   bottomContainer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#E6E8EB' },
   priceText: { fontSize: 22, color: '#2C3E50', fontWeight: '700', marginLeft: 10 },
   badge: { borderRadius: 20, overflow: 'hidden' },

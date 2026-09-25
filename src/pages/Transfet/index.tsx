@@ -15,9 +15,11 @@ import DatePicker from "react-native-date-picker";
 import Ionicons from "react-native-vector-icons/Ionicons";
 import { useTranslation } from "react-i18next";
 import { useSelector } from "react-redux";
-import { settings } from '../../api'; 
+import { settings } from '../../api';
 import { useNavigation } from "@react-navigation/native";
 import { ButtonComponent } from "../../components";
+import { useUnpaidCheck } from "../../hooks/useUnpaidCheck";
+import UnpaidMissionModal from "../../components/UnpaidMissionModal";
 
 const windowWidth = Dimensions.get("window").width;
 moment.locale("fr");
@@ -28,6 +30,7 @@ const TransfertGuideScreen: React.FC = () => {
   const token = useSelector(({ userReducer }: any) => userReducer.token);
   const user = useSelector(({ userReducer }: any) => userReducer.user);
 
+  const { unpaidMission, checkBeforeSubmit, clearUnpaid } = useUnpaidCheck();
   // 🔹 Données
   const [allData, setAllData] = useState<any[]>([]);
   const [cities, setCities] = useState<any[]>([]);
@@ -161,6 +164,9 @@ const TransfertGuideScreen: React.FC = () => {
       return;
     }
 
+    const canSubmit = await checkBeforeSubmit();
+    if (!canSubmit) return;
+
     try {
       await settings.SetTransfert({
         userid: user?.id,
@@ -264,6 +270,12 @@ const TransfertGuideScreen: React.FC = () => {
         <DatePicker modal open={openDate} date={startDate} mode="date" onConfirm={(d) => { setOpenDate(false); setStartDate(d); }} onCancel={() => setOpenDate(false)} />
         <DatePicker modal open={openTime} date={startTime} mode="time" onConfirm={(t) => { setOpenTime(false); setStartTime(t); }} onCancel={() => setOpenTime(false)} />
       </ScrollView>
+      <UnpaidMissionModal
+        visible={!!unpaidMission}
+        mission={unpaidMission}
+        onPaid={clearUnpaid}
+        onDismiss={clearUnpaid}
+      />
     </SafeAreaView>
   );
 };

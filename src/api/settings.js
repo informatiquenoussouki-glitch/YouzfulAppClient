@@ -1,5 +1,39 @@
-import axios from 'axios';
+import axios from '../helpers/axios';
 import * as c from '../helpers/config';
+
+// --- Cache anti-429 ---
+// Plusieurs écrans indépendants (Home, History, BabySitter, Guide) redemandent au
+// montage les mêmes ressources globales rarement modifiées (paramètres, villes,
+// langues, compétences, types de visite). Sans partage, ça envoie une rafale de
+// requêtes identiques en quelques secondes et le backend répond 429. On réutilise
+// donc la même promesse en cours/récente au lieu de relancer un appel réseau.
+const _sharedCache = {};
+function withCache(key, fetcher, ttlMs = 60000) {
+  const now = Date.now();
+  const cached = _sharedCache[key];
+  if (cached && now - cached.time < ttlMs) {
+    return cached.promise;
+  }
+  const promise = fetcher();
+  _sharedCache[key] = { promise, time: now };
+  promise.catch(() => {
+    // Un échec n'est pas mis en cache : la prochaine demande pourra réessayer
+    if (_sharedCache[key]?.promise === promise) delete _sharedCache[key];
+  });
+  return promise;
+}
+
+// Timeout par défaut (20s) pour les appels utilisant fetch() directement,
+// alignée sur le timeout de l'instance axios ci-dessus, pour éviter qu'un
+// appel réseau lent ne bloque l'app indéfiniment.
+const FETCH_TIMEOUT_MS = 20000;
+function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);1
+  return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+    clearTimeout(timeoutId)
+  );
+}
 
 const Login = ({mail, password}) =>
   new Promise((resolve, reject) => {
@@ -40,7 +74,7 @@ const DeleteAccount = token =>
   });
 
 const Cities = () =>
-  new Promise((resolve, reject) => {
+  withCache('cities', () => new Promise((resolve, reject) => {
     var config = {
       method: 'get',
       url: `${c.BASE_URL}${c.PARAMETERS}/Cities.php`,
@@ -48,17 +82,17 @@ const Cities = () =>
     axios(config)
       .then((response) => resolve(response.data))
       .catch((error) => reject(error));
-  });
+  }), 5 * 60 * 1000);
 
 const Skills = token =>
-  new Promise((resolve, reject) => {
+  withCache('skills', () => new Promise((resolve, reject) => {
     var config = {
       method: 'get',
       url: `${c.BASE_URL}${c.PARAMETERS}/Skills.php`,
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      
+
     };
     axios(config)
       .then(function (response) {
@@ -67,7 +101,7 @@ const Skills = token =>
       .catch(function (error) {
         reject(error);
       });
-  });
+  }), 5 * 60 * 1000);
 
 const Restaurants = (token, city) =>
   new Promise((resolve, reject) => {
@@ -91,6 +125,39 @@ const Restaurants = (token, city) =>
       });
   });   
 
+const GetAllPlats = (token) =>
+  new Promise((resolve, reject) => {
+    var config = {
+      method: 'get',
+      url: `${c.BASE_URL}/Restaurant/GetAllPlats.php`,
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    };
+
+    axios(config)
+      .then(function (response) {
+        resolve(response.data);
+      })
+      .catch(function (error) {
+        reject(error);
+      });
+  });
+
+const SetPlatRequest = (obj, token) =>
+  new Promise((resolve, reject) => {
+    axios
+      .post(`${c.BASE_URL}/Restaurant/SetPlatRequest.php`, JSON.stringify(obj), {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      })
+      .then((response) => resolve(response.data))
+      .catch((err) => reject(err));
+  });
+
 const RestaurantById = (token, id) =>
   new Promise((resolve, reject) => {
     var config = {
@@ -111,7 +178,7 @@ const RestaurantById = (token, id) =>
   });
 
 const Languages = token =>
-  new Promise((resolve, reject) => {
+  withCache('languages', () => new Promise((resolve, reject) => {
     var config = {
       method: 'get',
       url: `${c.BASE_URL}${c.PARAMETERS}/Languages.php`,
@@ -127,7 +194,7 @@ const Languages = token =>
       .catch(function (error) {
         reject(error);
       });
-  });
+  }), 5 * 60 * 1000);
 
 const VisitType = (token, ville) =>
   new Promise((resolve, reject) => {
@@ -298,14 +365,14 @@ const TravelHistoryDetails = (token, id) =>
   });
 
 const getAllParams = token =>
-  new Promise((resolve, reject) => {
+  withCache('params', () => new Promise((resolve, reject) => {
     var config = {
       method: 'get',
       url: `${c.BASE_URL}${c.PARAMETERS}/Global.php`,
       headers: {
         Authorization: `Bearer ${token}`,
       },
-    }; 
+    };
     axios(config)
       .then(function (response) {
         resolve(response.data);
@@ -313,7 +380,7 @@ const getAllParams = token =>
       .catch(function (error) {
         reject(error);
       });
-  });
+  }), 60 * 1000);
 
 const SetBabySetting = (obj, token) =>
   new Promise((resolve, reject) => {
@@ -462,7 +529,7 @@ export const GetPays = (token) =>
   });    
   
 export const GetTypesVisites = () =>
-  new Promise((resolve, reject) => {
+  withCache('typesVisites', () => new Promise((resolve, reject) => {
     axios
       .get(`${c.BASE_URL}/Guide/GetTypesVisites.php`, {
         headers: { Accept: "application/json" },
@@ -485,7 +552,7 @@ export const GetTypesVisites = () =>
         console.log("❌ Erreur TypesVisites :", error);
         reject(error);
       });
-  });
+  }), 5 * 60 * 1000);
 
 export const SetTransfert = (obj, token) =>
   new Promise((resolve, reject) => {
@@ -515,7 +582,7 @@ export const GetTransfertById = (id, token) =>
 
 export const AllReservationsHistory = async (token, userid) => {
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${c.BASE_URL}/History/api.php?action=AllReservationsHistory&userid=${userid}`,
       {
         method: "GET",
@@ -526,9 +593,6 @@ export const AllReservationsHistory = async (token, userid) => {
         },
       }
     );
-    if (!response.ok) {
-      return { status: "error", message: `HTTP ${response.status}`, data: [] };
-    }
     const text = await response.text();
     try {
       return JSON.parse(text);
@@ -544,7 +608,7 @@ export const AllReservationsHistory = async (token, userid) => {
 
 export const AllReservationDetails = async (token, type, id) => {
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${c.BASE_URL}/History/api.php?action=ReservationDetails&type=${type}&id=${id}`,
       {
         method: "GET",
@@ -569,7 +633,7 @@ export const AllReservationDetails = async (token, type, id) => {
 
 export const SetNoteAvis = async (token, obj) => {
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${c.BASE_URL}/History/api.php?action=SetNoteAvis`,
       {
         method: "POST",
@@ -581,9 +645,6 @@ export const SetNoteAvis = async (token, obj) => {
         body: JSON.stringify(obj),
       }
     );
-    if (!res.ok) {
-      return { status: "error", message: `HTTP ${res.status}` };
-    }
     const text = await res.text();
     try {
       return JSON.parse(text);
@@ -599,16 +660,13 @@ export const SetNoteAvis = async (token, obj) => {
 
 export const AllReviews = async (token) => {
   try {
-    const res = await fetch(`${c.BASE_URL}/History/api.php?action=AllReviews`, {
+    const res = await fetchWithTimeout(`${c.BASE_URL}/History/api.php?action=AllReviews`, {
       method: "GET",
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${token}`,
       },
     });
-    if (!res.ok) {
-      return [];
-    }
     const json = await res.json();
     if (json.status === "success") {
       return json.data;
@@ -776,6 +834,95 @@ const CancelReservation = (token, type, id) =>
       .catch(err => reject(err));
   });
 
+// Envoie une demande d'extension au prestataire avec la durée choisie (en heures, ex: 0.5, 1, 1.5...)
+const RequestExtension = (token, requestId, tempsPropose) =>
+  new Promise((resolve, reject) => {
+    axios
+      .post(
+        `${c.BASE_URL}/History/api.php?action=RequestExtension`,
+        { id: requestId, temps_propose: tempsPropose || 0.5 },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      )
+      .then(response => resolve(response.data))
+      .catch(err => reject(err));
+  });
+
+// Récupère le statut de la demande d'extension (polling par le client)
+export const GetExtensionStatus = async (token, id) => {
+  try {
+    const res = await fetchWithTimeout(
+      `${c.BASE_URL}/History/api.php?action=GetExtensionStatus&id=${id}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      console.error('❌ JSON invalide GetExtensionStatus:', text);
+      return null;
+    }
+  } catch (e) {
+    console.error('❌ Erreur GetExtensionStatus:', e);
+    return null;
+  }
+};
+
+export const ContactAdmin = (token, obj) =>
+  new Promise((resolve, reject) => {
+    axios
+      .post(`${c.BASE_URL}/User/ContactAdmin.php`, JSON.stringify(obj), {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+      })
+      .then((response) => resolve(response.data))
+      .catch((err) => reject(err));
+  });
+
+export const getMesMessagesAdmin = (token) =>
+  new Promise((resolve, reject) => {
+    axios
+      .get(`${c.BASE_URL}/User/ContactAdmin.php`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      })
+      .then((response) => resolve(response.data))
+      .catch((err) => reject(err));
+  });
+
+export const getUnreadMessagesAdminCount = (token) =>
+  new Promise((resolve, reject) => {
+    axios
+      .get(`${c.BASE_URL}/User/ContactAdmin.php?count=1`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      })
+      .then((response) => resolve(response.data))
+      .catch((err) => reject(err));
+  });
+
+// Retourne les missions terminées et non payées — bloque toute nouvelle commande si non vide
+export const checkUnpaidMissions = (token) =>
+  new Promise((resolve, reject) => {
+    axios
+      .get(`${c.BASE_URL}/User/CheckUnpaid.php`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      })
+      .then((response) => resolve(response.data))
+      .catch((err) => reject(err));
+  });
+
 export {
   Login,
   SignUp,
@@ -796,6 +943,8 @@ export {
   GuideHistoryDetails,
   Restaurants,
   RestaurantById,
+  GetAllPlats,
+  SetPlatRequest,
   DeleteAccount,
   RestoHistoryDetails,
   LostPass,
@@ -807,4 +956,5 @@ export {
   UpdateStatusBooking,
   ExtendBabysittingMission,
   CancelReservation,
+  RequestExtension,
 };

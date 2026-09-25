@@ -39,14 +39,14 @@ export function RestaurantReducer(state = initialState, action) {
         );
         return {
           ...state,
-          storeid: currentStoreId || state.storeid,
+          storeid: (currentStoreId !== undefined && currentStoreId !== null) ? currentStoreId : state.storeid,
           plats: updatedPlats,
         };
       } else {
         // ✅ AJOUT : On ajoute le nouveau plat au tableau existant
         return {
           ...state,
-          storeid: currentStoreId || state.storeid,
+          storeid: (currentStoreId !== undefined && currentStoreId !== null) ? currentStoreId : state.storeid,
           plats: [...state.plats, platDetails],
         };
       }

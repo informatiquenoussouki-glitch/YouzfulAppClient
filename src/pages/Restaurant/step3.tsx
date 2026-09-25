@@ -40,7 +40,9 @@ const RestoStep3: React.FC<{ navigation: any; route: any }> = ({
 }) => {
   const { t } = useTranslation(); 
 
-  const { item, id } = route.params;
+  const { item, id, items } = route.params;
+  const isMulti = Array.isArray(items) && items.length > 0;
+
   const dispatch = useDispatch();
   const data = useSelector(({ RestaurantReducer }: any) => RestaurantReducer);
   const [isLoading, setIsLoading] = React.useState(false);
@@ -48,7 +50,48 @@ const RestoStep3: React.FC<{ navigation: any; route: any }> = ({
   const [price, setPrice] = React.useState<any>(item?.price);
   const [qte, updateQte] = React.useState(1);
 
-  
+  // 🔹 Cas "plusieurs plats" (sélectionnés directement depuis RestoScreen) :
+  // une quantité par plat, ajoutés tous en même temps au panier.
+  const [multiQty, setMultiQty] = React.useState<{ [key: string]: number }>(() => {
+    const initial: { [key: string]: number } = {};
+    (items || []).forEach((p: any) => {
+      const already = data?.plats?.find((val: any) => val.id === p.id);
+      initial[p.id] = already ? already.qte : 1;
+    });
+    return initial;
+  });
+
+  const incMulti = (platId: number) => {
+    setMultiQty((prev) => ({ ...prev, [platId]: (prev[platId] || 1) + 1 }));
+  };
+
+  const decMulti = (platId: number) => {
+    setMultiQty((prev) => ({ ...prev, [platId]: Math.max(1, (prev[platId] || 1) - 1) }));
+  };
+
+  const totalMultiPrice = isMulti
+    ? items.reduce((sum: number, p: any) => sum + Number(p.price) * (multiQty[p.id] || 1), 0)
+    : 0;
+
+  // 🔹 Sélection directe (n'importe quels plats, tous restaurants confondus) :
+  // pas de restaurant assigné (id = 0), la demande sera acceptée par le premier prestataire concerné.
+  const ajouterTousLesPlats = () => {
+    items.forEach((p: any) => {
+      const q = multiQty[p.id] || 1;
+      dispatch(
+        setDateInfo(0, {
+          id: p.id,
+          name: p.name,
+          qte: q,
+          price: Number(p.price) * q,
+          img: p.urlpic,
+        }),
+      );
+    });
+    navigation.navigate('Panier');
+  };
+
+
   function navigatee() {
     dispatch(
       setDateInfo(id, {
@@ -123,7 +166,70 @@ const RestoStep3: React.FC<{ navigation: any; route: any }> = ({
       </View>
     );
   }
-  
+
+  if (isMulti) {
+    return (
+      <SafeAreaView style={styles.backgroundStyle}>
+        <ScrollView
+          style={{ backgroundColor: Colors.white, flex: 1 }}
+          contentInsetAdjustmentBehavior="automatic">
+          <Text style={styles.Title}>{t("whichDish")}</Text>
+
+          {items.map((p: any) => (
+            <View key={p.id} style={styles.multiCard}>
+              <Image
+                style={styles.multiCardImage}
+                resizeMode={'cover'}
+                source={p?.urlpic ? { uri: p.urlpic } : require('../../assets/images/plate.jpeg')}
+              />
+              <View style={{ flex: 1, padding: 10, justifyContent: 'center' }}>
+                <Text style={styles.Label}>{p?.name}</Text>
+                <Text style={[styles.Label, { fontWeight: '700' }]}>
+                  {Number(p.price) * (multiQty[p.id] || 1)} € / TTC
+                </Text>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginTop: 8,
+                  }}>
+                  <TouchableOpacity onPress={() => decMulti(p.id)}>
+                    <Icon name="minus" size={26} color="black" />
+                  </TouchableOpacity>
+                  <Text style={[styles.LabelText, { marginHorizontal: 15, marginTop: 0, marginBottom: 0 }]}>
+                    {multiQty[p.id] || 1}
+                  </Text>
+                  <TouchableOpacity onPress={() => incMulti(p.id)}>
+                    <Icon name="plus" size={26} color="black" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          ))}
+
+          <Divider style={styles.divider} />
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '90%',
+              alignSelf: 'center',
+            }}>
+            <Text style={styles.Title2}>{t("price")} : </Text>
+            <Text style={styles.Title2}>{totalMultiPrice} € / TTC</Text>
+          </View>
+
+          <View style={styles.buttonContainer}>
+            <Button mode="contained" style={styles.buttonStyle} onPress={ajouterTousLesPlats}>
+              {t("addToCart")}
+            </Button>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.backgroundStyle}>
       <ScrollView
@@ -280,7 +386,21 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
       marginTop:10,
     textAlign: 'center',
-  }, 
+  },
+  multiCard: {
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    height: 100,
+    margin: 5,
+    marginHorizontal: 20,
+    elevation: 2,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  multiCardImage: {
+    width: '35%',
+    height: '100%',
+  },
   Title2: {
     fontSize: 18,
     fontWeight: '700',

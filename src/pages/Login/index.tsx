@@ -45,13 +45,15 @@ const LoginScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
       return settings
         .Login({ mail, password })
         .then(async response => {
-          if (response.user) {
-            setTimeout(() => {
-              setIsLoading(false)
-              dispatch(success(response.user, response.token));
-              navigation.navigate("HistoryStack");
-            }, 10000);
-          } else {
+if (response.user) {
+
+  dispatch(success(response.user, response.token));
+
+  setIsLoading(false);
+
+  navigation.replace("BottomTabs");
+
+} else {
             dispatch(failure(response.error || response.message));
             setIsLoading(false)
             Toast.show({

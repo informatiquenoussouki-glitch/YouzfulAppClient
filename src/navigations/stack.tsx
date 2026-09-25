@@ -30,6 +30,7 @@ import InscriptionScreen from '../pages/Inscription';
 import InscriptionScreenStep2 from '../pages/Inscription/Step2';
 import InscriptionScreenStep3 from '../pages/Inscription/Step3';
 import ProfileScreen from '../pages/Profile';
+import ContactAdminScreen from '../pages/ContactAdmin';
 import PasswordScreen from '../pages/password';
 import DeleteAccount from '../pages/DeleteAccout';
 import Disconnect from '../pages/Disconnect';
@@ -208,9 +209,47 @@ const StackNav: React.FC<{}> = () => {
                 headerShown: false,
                 headerTintColor: 'white',
             }}>
-            <Stack.Screen name="Loading" component={Loading} options={{ presentation: 'transparentModal' }} />
-            <Stack.Screen name="Intro" component={Intro} options={{ presentation: 'transparentModal' }} />
-            <Stack.Screen name="BottomTabs" component={BottomTabs} options={{ presentation: 'transparentModal' }} />
+<Stack.Screen
+    name="Loading"
+    component={Loading}
+    options={{ presentation: 'transparentModal' }}
+/>
+
+<Stack.Screen
+    name="Intro"
+    component={Intro}
+    options={{ presentation: 'transparentModal' }}
+/>
+
+<Stack.Screen
+    name="LoginScreen"
+    component={LoginScreen}
+    options={{ header: props => <Header {...props} /> }}
+/>
+
+<Stack.Screen
+    name="InscriptionScreen"
+    component={InscriptionScreen}
+    options={{ header: props => <Header {...props} /> }}
+/>
+
+<Stack.Screen
+    name="InscriptionScreenStep2"
+    component={InscriptionScreenStep2}
+    options={{ header: props => <Header {...props} /> }}
+/>
+
+<Stack.Screen
+    name="InscriptionScreenStep3"
+    component={InscriptionScreenStep3}
+    options={{ header: props => <Header {...props} /> }}
+/>
+
+<Stack.Screen
+    name="BottomTabs"
+    component={BottomTabs}
+    options={{ presentation: 'transparentModal' }}
+/>
         </Stack.Navigator>
     );
 };
@@ -271,6 +310,7 @@ const ProfileStack: React.FC<{}> = () => {
                     <Stack.Screen name="LegalScreen" component={LegalScreen} options={{ headerShown: false }} />
                     <Stack.Screen name="PasswordScreen" component={PasswordScreen} options={{ headerShown: false }} />
                     <Stack.Screen name="DeleteAccount" component={DeleteAccount} options={{ headerShown: false }} />
+                    <Stack.Screen name="ContactAdminScreen" component={ContactAdminScreen} options={{ title: '' }} />
                 </>
             ) : (
                 <>

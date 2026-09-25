@@ -6,6 +6,8 @@ import {
   View,
   Image,
   FlatList,
+  ScrollView,
+  RefreshControl,
   ActivityIndicator,
 } from 'react-native';
 import moment from 'moment';
@@ -41,12 +43,11 @@ const [items, updateItems] = useState([]);
 const [isLoading, setIsLoading] = useState<boolean>(true);
 
 
- 
 /// 🔹 Récupère la liste des villes avec cache
 useEffect(() => {
   const fetchCities = async () => {
     try {
-      const cacheKey = 'cachedCities';
+      const cacheKey = 'cachedCities_restaurant';
 
       // 1️⃣ Charger depuis le cache d'abord
       const cachedCities = await AsyncStorage.getItem(cacheKey);
@@ -85,35 +86,32 @@ useEffect(() => {
   fetchCities();
 }, []);
 
-
   // 🔹 Récupère la liste des restaurants pour la ville sélectionnée avec cache
 useEffect(() => {
   if (!selectedCity) return; // Arrête si aucune ville n'est sélectionnée
 
   const fetchRestaurants = async () => {
+    const cacheKey = `cachedRestaurants_${selectedCity}`;
     try {
-      const cacheKey = `cachedRestaurants_${selectedCity}`;
+      // 1️⃣ Affichage instantané depuis le cache (le temps que l'API réponde)
       const cachedData = await AsyncStorage.getItem(cacheKey);
-
       if (cachedData) {
-        console.log(`📦 Restaurants de la ville ${selectedCity} chargés depuis AsyncStorage`);
+        console.log(`📦 Restaurants de la ville ${selectedCity} chargés depuis AsyncStorage (temporaire)`);
         updateItems(JSON.parse(cachedData));
       } else {
-        console.log('🌐 Chargement depuis API...');
         setIsLoading(true);
-
-        const resto = await settings.Restaurants(token, selectedCity);
-        const restoData = Array.isArray(resto) ? resto : resto?.data || [];
-
-        updateItems(restoData);
-
-        // 💾 Sauvegarde du cache pour cette ville
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(restoData));
-        console.log(`💾 Restaurants de la ville ${selectedCity} sauvegardés localement`);
       }
+
+      // 2️⃣ On rafraîchit toujours depuis l'API pour ne pas garder des restaurants supprimés
+      console.log('🌐 Chargement depuis API...');
+      const resto = await settings.Restaurants(token, selectedCity);
+      const restoData = Array.isArray(resto) ? resto : resto?.data || [];
+
+      updateItems(restoData);
+      await AsyncStorage.setItem(cacheKey, JSON.stringify(restoData));
+      console.log(`💾 Restaurants de la ville ${selectedCity} sauvegardés localement`);
     } catch (err) {
       console.error('❌ Erreur API :', err);
-      updateItems([]);
     } finally {
       setIsLoading(false);
     }
@@ -156,7 +154,7 @@ const handleRefresh = async () => {
     }
   };
 
-  const renderItem = ({ item, index }: any) => {
+  const renderItem = ({ item }: any) => {
     return (
       <TouchableOpacity
         style={styles.card}
@@ -203,6 +201,16 @@ const handleRefresh = async () => {
 
   return (
     <SafeAreaView style={styles.backgroundStyle}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoading && !!selectedCity}
+            onRefresh={handleRefresh}
+          />
+        }
+      >
       <Text style={styles.LabelText}>{t("chooseCity")} <Text style={{ color: 'red' }}>*</Text>  :</Text>
       <View style={styles.cardInput}>
    <RNPickerSelect
@@ -246,8 +254,9 @@ onValueChange={(value) => {
       item?.id ? item.id.toString() : index.toString()
     }
     extraData={items}
-    refreshing={isLoading && !!selectedCity} // rafraîchit uniquement si ville sélectionnée
-    onRefresh={handleRefresh}
+    scrollEnabled={false}
+
+
     ListEmptyComponent={
       <View style={styles.ContentContainer}>
         <Text adjustsFontSizeToFit style={styles.ContentStyle}>
@@ -273,6 +282,7 @@ onValueChange={(value) => {
           </Text>
         </TouchableOpacity>
       )}
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -281,6 +291,9 @@ const styles = StyleSheet.create({
   backgroundStyle: {
     backgroundColor: 'transparent',
     flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   CardImage: {
     width: '40%',
@@ -293,13 +306,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginVertical: 25,
     textTransform: 'uppercase',
-  }, 
-  buttonContainer: {
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingBottom: 20,
   },
   LabelText:{
      fontSize: 17,
@@ -384,8 +390,7 @@ const styles = StyleSheet.create({
     elevation: 2,
     width:'90%',
     marginLeft:20
-  }
-
+  },
 });
 const pickerSelectStyles = StyleSheet.create({
   inputIOS: {

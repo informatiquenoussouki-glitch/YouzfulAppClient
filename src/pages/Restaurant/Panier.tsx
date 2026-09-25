@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Toast from 'react-native-toast-message';
 import moment from 'moment';
+import DatePicker from 'react-native-date-picker';
 import { CreditCardInput, CardView } from 'react-native-credit-card-input-plus';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -31,6 +32,8 @@ import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useTranslation } from 'react-i18next';
 import { ButtonComponent } from '../../components';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useUnpaidCheck } from '../../hooks/useUnpaidCheck';
+import UnpaidMissionModal from '../../components/UnpaidMissionModal';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -49,6 +52,7 @@ const Panier: React.FC<{ navigation: any }> = ({
   const user = useSelector(({ userReducer }: any) => userReducer.user);
   const data = useSelector(({ RestaurantReducer }: any) => RestaurantReducer);
   const CardDetails = useSelector(({ userReducer }: any) => userReducer.card);
+  const { unpaidMission, checkBeforeSubmit, clearUnpaid } = useUnpaidCheck();
   const [isLoading, setIsLoading] = React.useState(false);
   const [visible, setVisible] = React.useState(false);
   const [result, setResult] = React.useState<any>(null);
@@ -62,6 +66,10 @@ const Panier: React.FC<{ navigation: any }> = ({
   });
   const [useOtherCard, UpdateuseOtherCard] = React.useState(false);
   const [loadingValidation, setLoadingValidation] = useState(false);
+  const [resDate, setResDate] = useState(new Date());
+  const [resTime, setResTime] = useState(new Date());
+  const [openDate, setOpenDate] = useState(false);
+  const [openTime, setOpenTime] = useState(false);
 
   const [cartError, setcartError] = useState({
     cvc: 'incomplete',
@@ -127,10 +135,15 @@ const Panier: React.FC<{ navigation: any }> = ({
   }
 
   async function finishProcess() {
+    const canSubmit = await checkBeforeSubmit();
+    if (!canSubmit) return;
     if (!adress?.trim()) {
       return Toast.show({ text1: t("deliveryAddressMissing"), type: "error", position: "top" });
     }
-    if (!data?.storeid) {
+    if (!resDate || !resTime) {
+      return Toast.show({ text1: t("reservationDateTimeMissing"), type: "error", position: "top" });
+    }
+    if (data?.storeid === null || data?.storeid === undefined) {
       return Toast.show({ text1: "Restaurant manquant", type: "error", position: "top" });
     }
     if (!Array.isArray(data?.plats) || data.plats.length === 0) {
@@ -151,6 +164,8 @@ const Panier: React.FC<{ navigation: any }> = ({
       comment: info || "",
       ville: data?.ville?.trim() || "Non précisée",
       totalprice: Number(data.totalprice || 0),
+      date: moment(resDate).format("YYYY-MM-DD"),
+      time: moment(resTime).format("HH:mm"),
       plats: data.plats.map((val: any) => ({
         id: val?.id,
         qte: val?.qte,
@@ -254,6 +269,32 @@ const Panier: React.FC<{ navigation: any }> = ({
             activeOutlineColor={COLOR.arrow}
           />
 
+          <View style={styles.inputContainer}>
+            <Text style={[styles.Label]}>{t("reservationDateTime")} <Text style={{ color: 'red' }}>*</Text> :</Text>
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '80%' }}>
+            <TouchableOpacity onPress={() => setOpenDate(true)} style={{ width: '48%' }}>
+              <TextInput
+                value={moment(resDate).format('DD/MM/YYYY')}
+                mode="outlined"
+                editable={false}
+                style={{ backgroundColor: '#ffffff' }}
+                pointerEvents="none"
+                right={<TextInput.Icon icon="calendar" />}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setOpenTime(true)} style={{ width: '48%' }}>
+              <TextInput
+                value={moment(resTime).format('HH:mm')}
+                mode="outlined"
+                editable={false}
+                style={{ backgroundColor: '#ffffff' }}
+                pointerEvents="none"
+                right={<TextInput.Icon icon="clock-outline" />}
+              />
+            </TouchableOpacity>
+          </View>
+
           <Divider style={styles.divider} />
 
           <View style={{ flexDirection: "row", justifyContent: "space-between", width: '90%' }}>
@@ -320,6 +361,30 @@ const Panier: React.FC<{ navigation: any }> = ({
           )}
         </View>
       </Modal>
+
+      <DatePicker
+        modal
+        open={openDate}
+        date={resDate}
+        mode="date"
+        minimumDate={new Date()}
+        onConfirm={(d) => { setOpenDate(false); setResDate(d); }}
+        onCancel={() => setOpenDate(false)}
+      />
+      <DatePicker
+        modal
+        open={openTime}
+        date={resTime}
+        mode="time"
+        onConfirm={(t) => { setOpenTime(false); setResTime(t); }}
+        onCancel={() => setOpenTime(false)}
+      />
+      <UnpaidMissionModal
+        visible={!!unpaidMission}
+        mission={unpaidMission}
+        onPaid={clearUnpaid}
+        onDismiss={clearUnpaid}
+      />
     </SafeAreaView>
   );
 };

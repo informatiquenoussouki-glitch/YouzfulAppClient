@@ -64,3 +64,30 @@ yarn-error.log
 
 # testing
 /coverage
+
+# Firebase — contient des clés API sensibles
+android/app/google-services.json
+ios/GoogleService-Info.plist
+
+# Build artifacts Android
+android/app/src/main/assets/index.android.bundle
+
+# Claude / outils internes
+.claude/
+.claude-flow/
+.swarm/
+.mcp.json
+
+# Fichiers accidentels (fragments de code créés par erreur)
+$*
+(*)
+Math.max*
+String(*
+clearInterval*
+execute[*
+getMessage*
+lastInsertId*
+prepare(*
+p.id
+now)
+,

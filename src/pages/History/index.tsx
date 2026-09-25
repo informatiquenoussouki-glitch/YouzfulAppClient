@@ -11,6 +11,7 @@ import {
   ScrollView,
   Vibration,
   Alert,
+  Modal,
 } from "react-native";
 import { Card, Divider } from "react-native-paper";
 import { useSelector, useDispatch } from "react-redux";
@@ -22,6 +23,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { COLOR } from "../../helpers/functions";
 import { setHistory } from "../../redux/actions/babySitting";
 import { logAlert } from "../../helpers/alertsLog";
+import { scheduleLocalNotification, cancelScheduledNotification } from "../../helpers/pushNotification";
 import Map from "../../assets/icons/map.svg";
 import Callendar from "../../assets/icons/callendar.svg";
 import { ButtonComponent } from "../../components";
@@ -39,9 +41,91 @@ const extensionsData: {
     dureeInitiale: number;
     temps_ajoute: number; // Cumul ex: 0.5, 1.0, 1.5...
     nextAlertAt: number;
+    pendingAutoEnd: boolean; // true si le client a refusé la prolongation : la mission se terminera seule à l'heure prévue
   };
 } = {};
 const alertesActivesSet = new Set<string>();
+
+const EXTENSION_DURATIONS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0];
+
+const TYPE_LABELS: Record<string, string> = {
+  babysitter: "Baby-sitting",
+  guide: "Visite guidée",
+  transfert: "Transfert",
+  activité: "Activité",
+  resto: "Restaurant",
+};
+
+async function scheduleReservationReminders(items: any[]) {
+  const now = Date.now();
+  for (const item of items) {
+    const statut = item.statut_prestataire || "en_attente";
+    if (statut !== "accepte" && statut !== "en_cours") continue;
+
+    const typeNorm: string = item.normalizedType || item.type || "";
+    const label = TYPE_LABELS[typeNorm] || typeNorm;
+
+    if (!item.date || !item.time) continue;
+    const heure = String(item.time).substring(0, 5);
+    const formattedDate = moment(item.date).format("YYYY-MM-DD");
+    const missionStart = new Date(`${formattedDate}T${heure}:00`).getTime();
+    if (isNaN(missionStart)) continue;
+
+    // Rappel J-1 (24h avant)
+    const j1Time = missionStart - 24 * 60 * 60 * 1000;
+    const notifJ1Id = `j1-${typeNorm}-${item.id}`;
+    if (j1Time > now) {
+      await cancelScheduledNotification(notifJ1Id);
+      await scheduleLocalNotification(
+        notifJ1Id,
+        `Rappel ${label}`,
+        `Demain à ${heure} vous avez une prestation ${label} planifiée.`,
+        j1Time,
+        { reservationId: String(item.id), type: typeNorm },
+      );
+    }
+
+    // Rappel à l'heure H (début de mission)
+    const notifH0Id = `h0-${typeNorm}-${item.id}`;
+    if (missionStart > now) {
+      await cancelScheduledNotification(notifH0Id);
+      await scheduleLocalNotification(
+        notifH0Id,
+        `Début ${label}`,
+        `Votre prestation ${label} commence maintenant (${heure}).`,
+        missionStart,
+        { reservationId: String(item.id), type: typeNorm },
+      );
+    }
+
+    // Rappel fin babysitter (30 min avant la fin)
+    if (typeNorm === "babysitter" && statut === "en_cours") {
+      const duree = parseFloat(item.duree) || 1;
+      const tempsAjoute = parseFloat(item.temps_ajoute) || 0;
+      const finMission = missionStart + (duree + tempsAjoute) * 3600000;
+      const notifFinId = `fin-babysitter-${item.id}`;
+      const preavis = finMission - 30 * 60 * 1000;
+      if (preavis > now) {
+        await cancelScheduledNotification(notifFinId);
+        await scheduleLocalNotification(
+          notifFinId,
+          "Mission bientôt terminée",
+          `La garde d'enfants se termine dans 30 minutes.`,
+          preavis,
+          { reservationId: String(item.id), type: "babysitter" },
+        );
+      }
+    }
+  }
+}
+
+const formatDuration = (h: number): string => {
+  const hours = Math.floor(h);
+  const mins = Math.round((h - hours) * 60);
+  if (hours === 0) return `${mins} min`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}min`;
+};
 
 // Résout les villes indépendamment de l'écran Guide : lit le cache, et si vide,
 // va chercher la liste directement (au lieu de dépendre d'une visite préalable du Guide).
@@ -220,8 +304,9 @@ const HistoryCard = memo(({ item, t, navigation }: any) => {
         </Text>
       </View>
 
-      {/* ZONE TEMPS RÉEL INTERNE À LA CARTE */}
-      {currentStatus === "en_cours" && (
+      {/* ZONE TEMPS RÉEL INTERNE À LA CARTE — babysitting uniquement, seul type pour
+          lequel la fin de mission et l'extension +30min sont gérées (checkFinMission) */}
+      {currentStatus === "en_cours" && normalizeTypeLocal(item.type) === "babysitter" && (
         <View style={styles.timerRow}>
           <TimerText item={item} t={t} />
           {tempsAjoute > 0 && (
@@ -254,6 +339,7 @@ const HistoryScreen = ({ navigation }: any) => {
   const [filteredItems, setFilteredItems] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const itemsRef = useRef<any[]>([]);
   const activeFilterRef = useRef<string>("all");
@@ -262,6 +348,72 @@ const HistoryScreen = ({ navigation }: any) => {
   const extensionsRef = useRef(extensionsData);
   const alertesActivesRef = useRef(alertesActivesSet);
   const paramsReadyRef = useRef(false);
+
+  // Extensions en attente de confirmation du prestataire (clé : "dur-<id>")
+  const pendingExtensionsRef = useRef<{
+    [key: string]: {
+      missionStart: number;
+      dureeInitiale: number;
+      originalFinReelle: number;
+      startedAt: number;
+      dureeProposee: number;
+    };
+  }>({});
+
+  const [extensionModalVisible, setExtensionModalVisible] = useState(false);
+  const [extensionModalData, setExtensionModalData] = useState<any>(null);
+  const [selectedExtDuration, setSelectedExtDuration] = useState(0.5);
+
+  const handleModalCancel = () => {
+    if (!extensionModalData) return;
+    const { key, finReelle, ext } = extensionModalData;
+    extensionsRef.current[key] = { ...ext, pendingAutoEnd: true, nextAlertAt: finReelle };
+    alertesActivesRef.current.delete(key);
+    setExtensionModalVisible(false);
+    setExtensionModalData(null);
+  };
+
+  const handleModalConfirm = async () => {
+    if (!extensionModalData) return;
+    const { item, key, missionStart, finReelle, ext } = extensionModalData;
+    const duree = selectedExtDuration;
+
+    extensionsRef.current[key] = { ...ext, pendingAutoEnd: false, nextAlertAt: finReelle + 5 * 60 * 1000 };
+    pendingExtensionsRef.current[key] = {
+      missionStart,
+      dureeInitiale: ext.dureeInitiale,
+      originalFinReelle: finReelle,
+      startedAt: Date.now(),
+      dureeProposee: duree,
+    };
+
+    setExtensionModalVisible(false);
+    setExtensionModalData(null);
+
+    try {
+      const result = await settings.RequestExtension(token, item.id, duree);
+      if (result?.status === 'success') {
+        Vibration.vibrate(300);
+        Toast.show({
+          type: 'info',
+          text1: '⏳ Demande envoyée',
+          text2: `En attente de confirmation du prestataire pour +${formatDuration(duree)}...`,
+          visibilityTime: 8000,
+        });
+        logAlert('Extension demandée', `En attente de la réponse pour +${formatDuration(duree)}.`);
+      } else {
+        extensionsRef.current[key] = { ...ext, pendingAutoEnd: true, nextAlertAt: finReelle };
+        delete pendingExtensionsRef.current[key];
+        Toast.show({ type: 'error', text1: 'Erreur', text2: result?.message || "Impossible d'envoyer la demande", visibilityTime: 6000 });
+      }
+    } catch (e) {
+      extensionsRef.current[key] = { ...ext, pendingAutoEnd: true, nextAlertAt: finReelle };
+      delete pendingExtensionsRef.current[key];
+      console.error('❌ Erreur RequestExtension:', e);
+    } finally {
+      alertesActivesRef.current.delete(key);
+    }
+  };
 
   useEffect(() => {
     itemsRef.current = items;
@@ -445,13 +597,14 @@ const HistoryScreen = ({ navigation }: any) => {
         const key = `dur-${item.id}`;
         if (alertesActivesRef.current.has(key)) continue;
 
-        // Initialisation depuis la DB (temps_ajoute inclus pour survivre aux refreshs)
+        // Initialisation depuis la DB (temps_ajoute = colonne top-level depuis AllReservationsHistory)
         if (!extensionsRef.current[key]) {
           extensionsRef.current[key] = {
             prixInitial: parseFloat(item.totalprice) || 0,
             dureeInitiale: parseFloat(item.duree) || 1,
             temps_ajoute: parseFloat(item.temps_ajoute) || 0,
             nextAlertAt: -1,
+            pendingAutoEnd: false,
           };
         }
 
@@ -464,101 +617,58 @@ const HistoryScreen = ({ navigation }: any) => {
         const formattedDate = moment(item.date).format("YYYY-MM-DD");
         const missionStart = new Date(`${formattedDate}T${h}:00`).getTime();
         const dureeTotal = ext.dureeInitiale + ext.temps_ajoute;
+        const finReelle = missionStart + dureeTotal * 3600000;
+        const PREAVIS_FIN_MS = 30 * 60 * 1000;
 
-        if (now < missionStart + dureeTotal * 3600000) continue;
+        // Cas 1 : le client a déjà refusé la prolongation — on ne fait qu'attendre
+        // l'heure de fin réelle pour terminer automatiquement, sans jamais couper avant.
+        if (ext.pendingAutoEnd) {
+          // Ne pas terminer si une demande d'extension est en attente de réponse du prestataire
+          if (pendingExtensionsRef.current[key]) continue;
+
+          if (now < finReelle) continue;
+
+          alertesActivesRef.current.add(key);
+          try {
+            const result = await settings.UpdateStatusBooking(
+              token,
+              item.id,
+              "babysitter",
+              "termine"
+            );
+            if (result?.status !== "success") {
+              throw new Error(result?.message || "Échec mise à jour statut");
+            }
+            extensionsRef.current[key] = { ...ext, nextAlertAt: Infinity };
+            const setTermine = (list: any[]) =>
+              list.map((b) =>
+                b.id === item.id ? { ...b, statut_prestataire: "termine" } : b
+              );
+            const updatedList = setTermine(itemsRef.current);
+            updateItems(updatedList);
+            setFilteredItems((prev) => setTermine(prev));
+            await AsyncStorage.setItem(`cachedHistory_${id}`, JSON.stringify(updatedList));
+            logAlert(t("Mission terminée"), `La mission (durée prévue de ${dureeTotal}h) est terminée.`);
+          } catch (e) {
+            console.error("❌ Erreur UpdateStatusBooking (auto):", e);
+            // Réessaie au prochain cycle (60s) plutôt que de bloquer indéfiniment
+            extensionsRef.current[key] = { ...ext, nextAlertAt: Date.now() + 5 * 60 * 1000 };
+          } finally {
+            alertesActivesRef.current.delete(key);
+          }
+          continue;
+        }
+
+        // Cas 2 : pas encore à 30 min de la fin — rien à faire pour l'instant
+        if (now < finReelle - PREAVIS_FIN_MS) continue;
 
         alertesActivesRef.current.add(key);
         Vibration.vibrate(1000);
-
         const thbs = globalTHBS || (ext.prixInitial / Math.max(ext.dureeInitiale, 1));
-        const coutTrenteMin = Math.round((thbs / 2) * 100) / 100;
-        const prochainPrix = Math.round((parseFloat(item.totalprice) + coutTrenteMin) * 100) / 100;
-
-        const finMissionMsg = `La durée prévue de ${dureeTotal}h est écoulée.\nVoulez-vous terminer la mission ?`;
-        logAlert(t("Mission terminée ?"), finMissionMsg);
-        Alert.alert(
-          t("Mission terminée ?"),
-          finMissionMsg,
-          [
-            {
-              text: t("Oui, terminer"),
-              onPress: async () => {
-                // Bloquer temporairement le popup pendant l'appel API pour éviter la race condition
-                extensionsRef.current[key] = { ...ext, nextAlertAt: Date.now() + 5 * 60 * 1000 };
-                try {
-                  // "Oui, terminer" ne change que le statut : ni totalprice ni cout_ajoute
-                  const result = await settings.UpdateStatusBooking(
-                    token,
-                    item.id,
-                    "babysitter",
-                    "termine"
-                  );
-                  if (result?.status !== "success") {
-                    throw new Error(result?.message || "Échec mise à jour statut");
-                  }
-                  // Statut confirmé en base : on ne redemande plus jamais pour cette mission
-                  extensionsRef.current[key] = { ...ext, nextAlertAt: Infinity };
-                  const setTermine = (list: any[]) =>
-                    list.map((b) =>
-                      b.id === item.id ? { ...b, statut_prestataire: "termine" } : b
-                    );
-                  const updatedList = setTermine(itemsRef.current);
-                  updateItems(updatedList);
-                  setFilteredItems((prev) => setTermine(prev));
-                  // Persister le cache immédiatement pour éviter qu'un remount /
-                  // relance de l'app ne compare le statut à une version périmée
-                  // et redéclenche à tort le toast "Statut mis à jour"
-                  await AsyncStorage.setItem(`cachedHistory_${id}`, JSON.stringify(updatedList));
-                  navigation.navigate(t("details"), { id: item.id, type: "babysitter" });
-                } catch (e) {
-                  console.error("❌ Erreur UpdateStatusBooking:", e);
-                  Toast.show({
-                    type: "error",
-                    text1: "Erreur",
-                    text2: "La mission n'a pas pu être terminée, nouvelle tentative bientôt.",
-                  });
-                  // nextAlertAt reste à +5 min (déjà positionné ci-dessus) pour réessayer
-                } finally {
-                  alertesActivesRef.current.delete(key);
-                }
-              },
-            },
-            {
-              text: `Non, +30 min (${coutTrenteMin} ${item.currency || "€"})`,
-              onPress: async () => {
-                const nouveauTempsAjoute = ext.temps_ajoute + 0.5;
-                // Mise à jour optimiste AVANT l'appel API pour éviter re-déclenchement immédiat
-                extensionsRef.current[key] = {
-                  ...ext,
-                  temps_ajoute: nouveauTempsAjoute,
-                  nextAlertAt: Date.now() + 30 * 60 * 1000,
-                };
-                try {
-                  await settings.ExtendBabysittingMission(token, {
-                    id: item.id,
-                    temps_ajoute: nouveauTempsAjoute,
-                    totalprice: prochainPrix,
-                    cout_ajoute: coutTrenteMin,
-                  });
-                  const setPrice = (list: any[]) =>
-                    list.map((b) =>
-                      b.id === item.id ? { ...b, totalprice: prochainPrix } : b
-                    );
-                  const updatedList = setPrice(itemsRef.current);
-                  updateItems(updatedList);
-                  setFilteredItems((prev) => setPrice(prev));
-                  // Persister le cache immédiatement (même raison que pour "Oui, terminer")
-                  await AsyncStorage.setItem(`cachedHistory_${id}`, JSON.stringify(updatedList));
-                } catch (e) {
-                  console.error("❌ Erreur ExtendBabysittingMission:", e);
-                } finally {
-                  alertesActivesRef.current.delete(key);
-                }
-              },
-            },
-          ],
-          { cancelable: false }
-        );
+        logAlert(t("Mission bientôt terminée ?"), `La mission se termine dans 30 minutes. Choisissez la durée de prolongation.`);
+        setExtensionModalData({ item, key, missionStart, finReelle, ext, thbs });
+        setSelectedExtDuration(0.5);
+        setExtensionModalVisible(true);
       }
     };
 
@@ -567,6 +677,115 @@ const HistoryScreen = ({ navigation }: any) => {
 
     return () => clearInterval(interval);
   }, [items, t, navigation, token]);
+
+  // 4. POLLING : attend la réponse du prestataire pour une extension +30min
+  useEffect(() => {
+    const checkPendingExtensions = async () => {
+      const keys = Object.keys(pendingExtensionsRef.current);
+      if (keys.length === 0) return;
+
+      for (const key of keys) {
+        const pending = pendingExtensionsRef.current[key];
+        const itemId = parseInt(key.replace('dur-', ''), 10);
+
+        try {
+          const result = await settings.GetExtensionStatus(token, itemId);
+          if (!result || result.status !== 'success') continue;
+
+          if (result.extension_status === 'accepted') {
+            delete pendingExtensionsRef.current[key];
+
+            // Le backend a mis à jour temps_ajoute/cout_ajoute/totalprice → on sync l'état local
+            const nouveauTempsAjoute = parseFloat(result.temps_ajoute) || (extensionsRef.current[key]?.temps_ajoute + 0.5);
+            const nouvelleFinReelle  = pending.missionStart + (pending.dureeInitiale + nouveauTempsAjoute) * 3600000;
+            const nouveauPrix        = parseFloat(result.totalprice) || 0;
+
+            const ext = extensionsRef.current[key];
+            if (ext) {
+              extensionsRef.current[key] = {
+                ...ext,
+                temps_ajoute: nouveauTempsAjoute,
+                pendingAutoEnd: true,
+                nextAlertAt: nouvelleFinReelle,
+              };
+            }
+
+            const setPrice = (list: any[]) =>
+              list.map((b) => b.id == itemId ? { ...b, totalprice: nouveauPrix } : b);
+            const updatedList = setPrice(itemsRef.current);
+            updateItems(updatedList);
+            setFilteredItems((prev) => setPrice(prev));
+            await AsyncStorage.setItem(`cachedHistory_${id}`, JSON.stringify(updatedList));
+
+            Vibration.vibrate(500);
+            Toast.show({
+              type: 'success',
+              text1: '✅ Extension acceptée !',
+              text2: `+${formatDuration(pending.dureeProposee || 0.5)} confirmés par le prestataire.`,
+              visibilityTime: 8000,
+            });
+            logAlert('Extension acceptée', `Le prestataire a accepté la prolongation de +${formatDuration(pending.dureeProposee || 0.5)}.`);
+
+          } else if (result.extension_status === 'refused') {
+            delete pendingExtensionsRef.current[key];
+
+            const ext = extensionsRef.current[key];
+            if (ext) {
+              extensionsRef.current[key] = {
+                ...ext,
+                pendingAutoEnd: true,
+                nextAlertAt: pending.originalFinReelle,
+              };
+            }
+
+            // Si l'heure de fin originale est déjà passée, terminer immédiatement
+            if (Date.now() >= pending.originalFinReelle) {
+              try {
+                await settings.UpdateStatusBooking(token, itemId, 'babysitter', 'termine');
+                const setTermine = (list: any[]) =>
+                  list.map((b) => b.id == itemId ? { ...b, statut_prestataire: 'termine' } : b);
+                const upd = setTermine(itemsRef.current);
+                updateItems(upd);
+                setFilteredItems((prev) => setTermine(prev));
+                await AsyncStorage.setItem(`cachedHistory_${id}`, JSON.stringify(upd));
+              } catch (e) {
+                console.error('❌ Erreur terminate after refused extension:', e);
+              }
+            }
+
+            Toast.show({
+              type: 'info',
+              text1: '❌ Extension refusée',
+              text2: 'Le prestataire n\'a pas accepté la prolongation. La mission se terminera à l\'heure prévue.',
+              visibilityTime: 8000,
+            });
+            logAlert('Extension refusée', `Le prestataire a refusé la prolongation de +${formatDuration(pending.dureeProposee || 0.5)}.`);
+
+          } else if (result.extension_status === 'pending') {
+            // Timeout : 20 min sans réponse → traiter comme un refus
+            if (Date.now() - pending.startedAt > 20 * 60 * 1000) {
+              delete pendingExtensionsRef.current[key];
+              const ext = extensionsRef.current[key];
+              if (ext) {
+                extensionsRef.current[key] = { ...ext, pendingAutoEnd: true, nextAlertAt: pending.originalFinReelle };
+              }
+              Toast.show({
+                type: 'info',
+                text1: '⏰ Délai dépassé',
+                text2: 'Aucune réponse du prestataire. La mission se terminera à l\'heure prévue.',
+                visibilityTime: 8000,
+              });
+            }
+          }
+        } catch (e) {
+          console.error('❌ Erreur polling extension:', e);
+        }
+      }
+    };
+
+    const interval = setInterval(checkPendingExtensions, 30000);
+    return () => clearInterval(interval);
+  }, [token, id]);
 
   const filters = [
     { key: "all", label: t("Tous") },
@@ -640,19 +859,30 @@ const HistoryScreen = ({ navigation }: any) => {
           const nouveauStatut = newBooking?.statut_prestataire;
           if (oldBooking && ancienStatut && nouveauStatut && ancienStatut !== nouveauStatut) {
             const statutMsg = `Votre demande est maintenant : ${nouveauStatut}`;
+            const alertTitle = "🔔 Statut mis à jour !";
+            // Design d'origine (Toast) + vibration ajoutée ; déclenché une seule fois
+            // puisqu'on ne compare qu'au dernier statut connu à chaque rafraîchissement.
+            Vibration.vibrate(500);
             Toast.show({
               type: "info",
-              text1: "🔔 Statut mis à jour !",
+              text1: alertTitle,
               text2: statutMsg,
               visibilityTime: 8000,
             });
-            logAlert("🔔 Statut mis à jour !", statutMsg);
+            logAlert(alertTitle, statutMsg, {
+              reservationId: newBooking.id,
+              type: normalizeType(newBooking.type),
+            });
           }
         });
       }
 
       updateItems(sorted);
-      
+
+      // Programme les notifications locales pour J-1 et début de mission
+      // → se déclenchent même si l'app est fermée
+      scheduleReservationReminders(sorted).catch(() => {});
+
       const currentFilter = activeFilterRef.current;
       if (currentFilter === "all") {
         setFilteredItems(sorted);
@@ -670,7 +900,8 @@ const HistoryScreen = ({ navigation }: any) => {
   };
 
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
 
     const loadHistory = async () => {
       setIsLoading(true);
@@ -682,16 +913,25 @@ const HistoryScreen = ({ navigation }: any) => {
         dispatch(setHistory(parsed));
         setIsLoading(false);
       }
-      
+
       await loadPlatformParams();
       await fetchData();
 
-      intervalId = setInterval(() => { fetchData(true); }, 60000);
+      // Le composant a pu être démonté pendant ces appels asynchrones (navigation
+      // rapide hors de l'écran) : ne surtout pas démarrer l'intervalle dans ce cas,
+      // sinon il continue de sonder l'API indéfiniment en arrière-plan (fuite qui,
+      // cumulée à chaque aller-retour sur l'onglet, peut déclencher un 429).
+      if (!cancelled) {
+        intervalId = setInterval(() => { fetchData(true); }, 60000);
+      }
     };
 
     if (token && id) loadHistory();
 
-    return () => { if (intervalId) clearInterval(intervalId); };
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [token, id]);
 
   const sortByDate = (data: any[]) => {
@@ -704,6 +944,7 @@ const HistoryScreen = ({ navigation }: any) => {
 
   const applyFilter = (filterKey: string) => {
     setActiveFilter(filterKey);
+    setCurrentPage(1);
     if (filterKey === "all") {
       setFilteredItems(sortByDate(items));
     } else {
@@ -711,6 +952,20 @@ const HistoryScreen = ({ navigation }: any) => {
       setFilteredItems(sortByDate(filtered));
     }
   };
+
+  // Pagination côté app (20 demandes par page) pour alléger le rendu de la liste,
+  // sans changer l'appel API qui renvoie toujours l'historique complet.
+  const PAGE_SIZE = 20;
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [filteredItems.length, totalPages, currentPage]);
+
+  const paginatedItems = filteredItems.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   const renderItem = ({ item }: any) => (
     <HistoryCard item={item} t={t} navigation={navigation} />
@@ -726,21 +981,32 @@ const HistoryScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.background}>
       <View style={styles.container}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filterContainer}
+          contentContainerStyle={styles.filterContent}
+        >
           {filters.map((f) => (
             <TouchableOpacity
               key={f.key}
               style={[styles.filterButton, activeFilter === f.key && styles.filterButtonActive]}
               onPress={() => applyFilter(f.key)}
             >
-              <Text style={[styles.filterText, activeFilter === f.key && styles.filterTextActive]}>{f.label}</Text>
+              <Text
+                style={[styles.filterText, activeFilter === f.key && styles.filterTextActive]}
+                numberOfLines={1}
+              >
+                {f.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
 
         {token && id ? (
           <FlatList
-            data={filteredItems}
+            key={`page-${currentPage}`}
+            data={paginatedItems}
             renderItem={renderItem}
             keyExtractor={(item, index) => `${item.id}_${index}`}
             onRefresh={() => fetchData(false)}
@@ -760,7 +1026,72 @@ const HistoryScreen = ({ navigation }: any) => {
             <ButtonComponent title="Se connecter" press={() => navigation.navigate("ProfileStack")} isLoading={false} />
           </View>
         )}
+
+        {token && id && filteredItems.length > 0 && (
+          <View style={styles.paginationRow}>
+            <TouchableOpacity
+              disabled={currentPage === 1}
+              onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              style={[styles.pageButton, currentPage === 1 && styles.pageButtonDisabled]}
+            >
+              <Text style={styles.pageButtonText}>‹ Préc.</Text>
+            </TouchableOpacity>
+            <Text style={styles.pageIndicator}>{currentPage} / {totalPages}</Text>
+            <TouchableOpacity
+              disabled={currentPage === totalPages}
+              onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              style={[styles.pageButton, currentPage === totalPages && styles.pageButtonDisabled]}
+            >
+              <Text style={styles.pageButtonText}>Suiv. ›</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
+
+      <Modal
+        visible={extensionModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={handleModalCancel}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>Prolonger la mission ?</Text>
+            <Text style={styles.modalSubtitle}>{`La mission se termine dans 30 minutes.\nChoisissez la durée de prolongation :`}</Text>
+            <ScrollView style={styles.durationList} showsVerticalScrollIndicator={false}>
+              {EXTENSION_DURATIONS.map((h) => {
+                const thbs = extensionModalData?.thbs || 0;
+                const price = Math.round(thbs * h * 100) / 100;
+                const currency = extensionModalData?.item?.currency || '€';
+                const isSelected = selectedExtDuration === h;
+                return (
+                  <TouchableOpacity
+                    key={h}
+                    style={[styles.durationOption, isSelected && styles.durationOptionSelected]}
+                    onPress={() => setSelectedExtDuration(h)}
+                  >
+                    <View style={[styles.radioCircle, isSelected && styles.radioCircleSelected]} />
+                    <Text style={[styles.durationLabel, isSelected && styles.durationLabelSelected]}>
+                      {formatDuration(h)}
+                    </Text>
+                    <Text style={[styles.durationPrice, isSelected && styles.durationPriceSelected]}>
+                      {price.toFixed(2)} {currency}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity style={styles.modalBtnCancel} onPress={handleModalCancel}>
+                <Text style={styles.modalBtnCancelText}>Terminer à l'heure</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalBtnConfirm} onPress={handleModalConfirm}>
+                <Text style={styles.modalBtnConfirmText}>Prolonger</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -769,8 +1100,14 @@ const styles = StyleSheet.create({
   background: { flex: 1, backgroundColor: "transparent" },
   container: { flex: 1, padding: 15 },
   loader: { flex: 1, justifyContent: "center", alignItems: "center" },
-  filterContainer: { marginBottom: 10, flexGrow: 0, flexDirection: "row" },
-  filterButton: { backgroundColor: "#fff", borderRadius: 25, paddingVertical: 8, paddingHorizontal: 18, marginRight: 8, elevation: 2 },
+  filterContainer: { marginBottom: 10, flexGrow: 0, height: 46 },
+  filterContent: { flexDirection: "row", alignItems: "center", paddingRight: 4 },
+  paginationRow: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", marginTop: 10 },
+  pageButton: { backgroundColor: "#2C7BE5", borderRadius: 16, paddingVertical: 6, paddingHorizontal: 12 },
+  pageButtonDisabled: { backgroundColor: "#CBD5E0" },
+  pageButtonText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  pageIndicator: { marginHorizontal: 10, fontSize: 13, color: "#333", fontWeight: "600" },
+  filterButton: { backgroundColor: "#fff", borderRadius: 25, paddingVertical: 8, paddingHorizontal: 18, marginRight: 8, elevation: 2, justifyContent: "center", alignItems: "center" },
   filterButtonActive: { backgroundColor: "#2C7BE5" },
   filterText: { color: "#333", fontSize: 14, fontWeight: "500" },
   filterTextActive: { color: "#fff" },
@@ -794,6 +1131,24 @@ const styles = StyleSheet.create({
   timerText: { fontSize: 13, fontWeight: "600", color: "#2C7BE5" },
   timerTermine: { color: "#D32F2F" },
   extensionText: { fontSize: 12, color: "#FF9800", fontWeight: "500" },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 16 },
+  modalContainer: { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '100%', maxHeight: '80%', elevation: 10 },
+  modalTitle: { fontSize: 18, fontWeight: '700', color: '#222', marginBottom: 8, textAlign: 'center' },
+  modalSubtitle: { fontSize: 14, color: '#555', marginBottom: 14, textAlign: 'center', lineHeight: 20 },
+  durationList: { maxHeight: 300, marginBottom: 16 },
+  durationOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginBottom: 6, backgroundColor: '#F5F5F5' },
+  durationOptionSelected: { backgroundColor: '#EDE7F6' },
+  radioCircle: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#999', marginRight: 12 },
+  radioCircleSelected: { borderColor: '#6C2B8F', backgroundColor: '#6C2B8F' },
+  durationLabel: { flex: 1, fontSize: 15, color: '#333', fontWeight: '500' },
+  durationLabelSelected: { color: '#6C2B8F', fontWeight: '700' },
+  durationPrice: { fontSize: 14, color: '#666', fontWeight: '500' },
+  durationPriceSelected: { color: '#6C2B8F', fontWeight: '700' },
+  modalButtons: { flexDirection: 'row', gap: 10 },
+  modalBtnCancel: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#F0F0F0', alignItems: 'center' },
+  modalBtnCancelText: { color: '#555', fontSize: 14, fontWeight: '600' },
+  modalBtnConfirm: { flex: 1, paddingVertical: 12, borderRadius: 10, backgroundColor: '#6C2B8F', alignItems: 'center' },
+  modalBtnConfirmText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 });
 
 export default HistoryScreen;
